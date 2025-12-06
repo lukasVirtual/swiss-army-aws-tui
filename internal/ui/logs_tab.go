@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"sort"
@@ -9,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"swiss-army-tui/internal/aws"
+	"swiss-army-tui/internal/aws/clients"
 	"swiss-army-tui/pkg/logger"
 
 	"github.com/gdamore/tcell/v2"
@@ -31,6 +34,12 @@ type LogsTab struct {
 	autoScroll     bool
 	maxLines       int
 	activeLogGroup string
+	awsClient      *aws.Client
+
+	// CloudWatch Logs specific fields
+	cloudWatchCtx    context.Context
+	cloudWatchCancel context.CancelFunc
+	tailingActive    bool
 }
 
 type LogEntry struct {
@@ -227,15 +236,18 @@ func (lt *LogsTab) loadLogsForSource(sourceName string) {
 	lt.mu.RUnlock()
 
 	if !exists {
-
 		lt.mu.Lock()
 		switch sourceName {
 		case "cloudwatch":
-			logger.Info("Cloudwatch logs activated...")
+			logger.Info("CloudWatch logs activated...")
 			lt.logs[sourceName] = []LogEntry{}
+			if lt.activeLogGroup != "" && lt.awsClient != nil {
+				go lt.loadCloudWatchLogs(lt.activeLogGroup)
+			} else {
+				lt.updateStatus("No active log group or AWS client available", "yellow")
+			}
 		default:
 			lt.logs[sourceName] = []LogEntry{}
-
 		}
 		lt.mu.Unlock()
 		logs = []LogEntry{}
@@ -453,7 +465,6 @@ func (lt *LogsTab) Refresh() {
 
 	switch source {
 	case "app":
-
 		lt.addLogEntry("app", LogEntry{
 			Timestamp: time.Now(),
 			Level:     "INFO",
@@ -461,8 +472,14 @@ func (lt *LogsTab) Refresh() {
 			Source:    "app",
 			Fields:    map[string]interface{}{"action": "refresh"},
 		})
+	case "cloudwatch":
+		lt.stopTailing()
+		if lt.activeLogGroup != "" && lt.awsClient != nil {
+			go lt.loadCloudWatchLogs(lt.activeLogGroup)
+		} else {
+			lt.updateStatus("No active log group or AWS client available", "yellow")
+		}
 	default:
-
 		lt.loadLogsForSource(source)
 	}
 
@@ -510,6 +527,195 @@ func (lt *LogsTab) ShowLambdaLogGroup(functionName, logGroup string) {
 	lt.updateStatus(message, "blue")
 }
 
+// SetAWSClient sets the AWS client for the LogsTab
+func (lt *LogsTab) SetAWSClient(client *aws.Client) {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	lt.awsClient = client
+	if client != nil {
+		logger.Info("AWS client set for LogsTab")
+	} else {
+		logger.Info("AWS client removed from LogsTab")
+	}
+}
+
+// loadCloudWatchLogs loads logs from CloudWatch Logs
+func (lt *LogsTab) loadCloudWatchLogs(logGroupName string) {
+	if lt.awsClient == nil {
+		lt.updateStatus("No AWS client available", "red")
+		return
+	}
+
+	cloudWatchService := lt.awsClient.GetCloudWatchLogsService()
+	if cloudWatchService == nil {
+		lt.updateStatus("CloudWatch Logs service not available", "red")
+		return
+	}
+
+	lt.updateStatus(fmt.Sprintf("Loading CloudWatch logs from %s...", logGroupName), "yellow")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Get log streams
+	streams, err := cloudWatchService.DescribeLogStreams(ctx, logGroupName, 10)
+	if err != nil {
+		logger.Error("Failed to describe log streams", zap.String("logGroup", logGroupName), zap.Error(err))
+		lt.updateStatus(fmt.Sprintf("Failed to get log streams: %s", err.Error()), "red")
+		return
+	}
+
+	if len(streams) == 0 {
+		lt.updateStatus(fmt.Sprintf("No log streams found in %s", logGroupName), "yellow")
+		return
+	}
+
+	// Load events from the most recent streams
+	var allEvents []clients.LogEvent
+	for _, stream := range streams {
+		events, _, err := cloudWatchService.GetLogEvents(ctx, logGroupName, stream.LogStreamName, 50, false)
+		if err != nil {
+			logger.Error("Failed to get log events", zap.String("logGroup", logGroupName), zap.String("stream", stream.LogStreamName), zap.Error(err))
+			continue
+		}
+		allEvents = append(allEvents, events...)
+	}
+
+	// Convert to LogEntry format and add to logs
+	lt.mu.Lock()
+	var logEntries []LogEntry
+	for _, event := range allEvents {
+		entry := LogEntry{
+			Timestamp: time.Now(), // We'll use the event timestamp below
+			Level:     "INFO",
+			Message:   event.Message,
+			Source:    "cloudwatch",
+			Fields:    make(map[string]interface{}),
+		}
+
+		if event.Timestamp != 0 {
+			entry.Timestamp = time.UnixMilli(event.Timestamp)
+		}
+		if event.IngestionTime != 0 {
+			entry.Fields["ingestionTime"] = time.UnixMilli(event.IngestionTime).Format("2006-01-02 15:04:05")
+		}
+
+		logEntries = append(logEntries, entry)
+	}
+
+	// Sort by timestamp (newest first)
+	sort.Slice(logEntries, func(i, j int) bool {
+		return logEntries[i].Timestamp.After(logEntries[j].Timestamp)
+	})
+
+	lt.logs["cloudwatch"] = logEntries
+	lt.mu.Unlock()
+
+	// Update display if cloudwatch is the selected source
+	lt.mu.RLock()
+	selectedSource := lt.selectedSource
+	lt.mu.RUnlock()
+
+	if selectedSource == "cloudwatch" {
+		lt.updateLogDisplay(logEntries)
+	}
+
+	lt.updateStatus(fmt.Sprintf("Loaded %d CloudWatch log entries from %d streams", len(logEntries), len(streams)), "green")
+
+	// Start tailing if not already active
+	lt.startTailing(logGroupName, streams)
+}
+
+// startTailing starts real-time tailing of log streams
+func (lt *LogsTab) startTailing(logGroupName string, streams []clients.LogStreamInfo) {
+	lt.mu.Lock()
+	if lt.tailingActive {
+		lt.mu.Unlock()
+		return
+	}
+
+	// Cancel existing tailing if any
+	if lt.cloudWatchCancel != nil {
+		lt.cloudWatchCancel()
+	}
+
+	lt.cloudWatchCtx, lt.cloudWatchCancel = context.WithCancel(context.Background())
+	lt.tailingActive = true
+	lt.mu.Unlock()
+
+	go func() {
+		defer func() {
+			lt.mu.Lock()
+			lt.tailingActive = false
+			lt.mu.Unlock()
+		}()
+
+		cloudWatchService := lt.awsClient.GetCloudWatchLogsService()
+		if cloudWatchService == nil {
+			return
+		}
+
+		// Extract stream names
+		var streamNames []string
+		for _, stream := range streams {
+			streamNames = append(streamNames, stream.LogStreamName)
+		}
+
+		eventsChan := make(chan clients.LogEvent, 100)
+		errorChan := make(chan error, 10)
+
+		// Start tailing
+		go cloudWatchService.TailLogStreams(lt.cloudWatchCtx, logGroupName, streamNames, eventsChan, errorChan)
+
+		for {
+			select {
+			case <-lt.cloudWatchCtx.Done():
+				return
+			case event := <-eventsChan:
+				lt.addCloudWatchEvent(event)
+			case err := <-errorChan:
+				logger.Error("CloudWatch tailing error", zap.Error(err))
+				lt.updateStatus(fmt.Sprintf("Tailing error: %s", err.Error()), "red")
+			}
+		}
+	}()
+}
+
+// addCloudWatchEvent adds a CloudWatch event to the logs
+func (lt *LogsTab) addCloudWatchEvent(event clients.LogEvent) {
+	entry := LogEntry{
+		Level:   "INFO",
+		Message: event.Message,
+		Source:  "cloudwatch",
+		Fields:  make(map[string]interface{}),
+	}
+
+	if event.Timestamp != 0 {
+		entry.Timestamp = time.UnixMilli(event.Timestamp)
+	} else {
+		entry.Timestamp = time.Now()
+	}
+
+	if event.IngestionTime != 0 {
+		entry.Fields["ingestionTime"] = time.UnixMilli(event.IngestionTime).Format("2006-01-02 15:04:05")
+	}
+
+	lt.addLogEntry("cloudwatch", entry)
+}
+
+// stopTailing stops the active tailing process
+func (lt *LogsTab) stopTailing() {
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	if lt.cloudWatchCancel != nil {
+		lt.cloudWatchCancel()
+		lt.cloudWatchCancel = nil
+	}
+	lt.tailingActive = false
+}
+
 func (lt *LogsTab) GetLogCount(source string) int {
 	lt.mu.RLock()
 	defer lt.mu.RUnlock()
@@ -544,4 +750,9 @@ func (lt *LogsTab) ExportLogs(filename string) error {
 	}
 
 	return nil
+}
+
+// Cleanup stops any active tailing processes
+func (lt *LogsTab) Cleanup() {
+	lt.stopTailing()
 }

@@ -410,8 +410,11 @@ func (app *App) handleProfileChange(data map[string]string) {
 
 	app.awsClient = client
 
-	// Update resources tab with new client
+	// Update tabs with new client
 	app.resourcesTab.SetAWSClient(client)
+	if app.logsTab != nil {
+		app.logsTab.SetAWSClient(client)
+	}
 
 	// Show success message
 	app.showMessage(fmt.Sprintf("Switched to profile: %s (%s)", profile, region))

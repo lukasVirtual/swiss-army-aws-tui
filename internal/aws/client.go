@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -22,26 +23,28 @@ import (
 )
 
 type ServiceClients struct {
-	EC2    *ec2.Client
-	S3     *s3.Client
-	RDS    *rds.Client
-	ECS    *ecs.Client
-	Lambda *lambda.Client
-	STS    *sts.Client
+	EC2            *ec2.Client
+	S3             *s3.Client
+	RDS            *rds.Client
+	ECS            *ecs.Client
+	Lambda         *lambda.Client
+	STS            *sts.Client
+	CloudWatchLogs *cloudwatchlogs.Client
 }
 
 type Client struct {
-	mu            sync.RWMutex
-	config        aws.Config
-	clients       *ServiceClients
-	lambdaService *clients.LambdaService
-	s3Service     *clients.S3Service
-	ec2Service    *clients.EC2Service
-	rdsService    *clients.RDSService
-	profile       string
-	region        string
-	accountID     string
-	userIdentity  *sts.GetCallerIdentityOutput
+	mu                    sync.RWMutex
+	config                aws.Config
+	clients               *ServiceClients
+	lambdaService         *clients.LambdaService
+	s3Service             *clients.S3Service
+	ec2Service            *clients.EC2Service
+	rdsService            *clients.RDSService
+	cloudWatchLogsService *clients.CloudWatchLogsService
+	profile               string
+	region                string
+	accountID             string
+	userIdentity          *sts.GetCallerIdentityOutput
 }
 
 func NewClient(profile, region string) (*Client, error) {
@@ -87,12 +90,13 @@ func (c *Client) initializeClients() error {
 	defer c.mu.Unlock()
 
 	c.clients = &ServiceClients{
-		EC2:    ec2.NewFromConfig(c.config),
-		S3:     s3.NewFromConfig(c.config),
-		RDS:    rds.NewFromConfig(c.config),
-		ECS:    ecs.NewFromConfig(c.config),
-		Lambda: lambda.NewFromConfig(c.config),
-		STS:    sts.NewFromConfig(c.config),
+		EC2:            ec2.NewFromConfig(c.config),
+		S3:             s3.NewFromConfig(c.config),
+		RDS:            rds.NewFromConfig(c.config),
+		ECS:            ecs.NewFromConfig(c.config),
+		Lambda:         lambda.NewFromConfig(c.config),
+		STS:            sts.NewFromConfig(c.config),
+		CloudWatchLogs: cloudwatchlogs.NewFromConfig(c.config),
 	}
 
 	if c.clients != nil && c.clients.Lambda != nil {
@@ -137,6 +141,17 @@ func (c *Client) initializeClients() error {
 		}
 	} else {
 		logger.Debug("RDS SDK client not initialized; skipping RDS service wrapper")
+	}
+
+	if c.clients != nil && c.clients.CloudWatchLogs != nil {
+		cloudWatchLogsSvc, err := clients.NewCloudWatchLogsService(c.clients.CloudWatchLogs)
+		if err != nil {
+			logger.Debug("failed to initialize CloudWatch Logs service wrapper", zap.Error(err))
+		} else {
+			c.cloudWatchLogsService = cloudWatchLogsSvc
+		}
+	} else {
+		logger.Debug("CloudWatch Logs SDK client not initialized; skipping CloudWatch Logs service wrapper")
 	}
 
 	return nil
@@ -238,6 +253,14 @@ func (c *Client) GetRDSFunctionDetails(ctx context.Context) ([]clients.RDSDetail
 	return svc.GetRDSDetail(ctx)
 }
 
+// GetCloudWatchLogsService retrieves the CloudWatch Logs service
+func (c *Client) GetCloudWatchLogsService() *clients.CloudWatchLogsService {
+	c.mu.RLock()
+	svc := c.cloudWatchLogsService
+	c.mu.RUnlock()
+	return svc
+}
+
 func (c *Client) SwitchProfile(profile, region string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -303,6 +326,7 @@ func (c *Client) Close() error {
 	c.s3Service = nil
 	c.ec2Service = nil
 	c.rdsService = nil
+	c.cloudWatchLogsService = nil
 
 	logger.Debug("AWS client closed", zap.String("profile", c.profile))
 	return nil
