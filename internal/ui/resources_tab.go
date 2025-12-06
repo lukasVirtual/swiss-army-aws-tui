@@ -154,6 +154,9 @@ func (rt *ResourcesTab) initializeUI() error {
 		case 'f':
 			rt.focusFilter()
 			return nil
+		case 'l':
+			rt.onLambdaLogsKey()
+			return nil
 		}
 		logger.Info("Service list key pressed", zap.String("key", event.Name()))
 		logger.Info("Resource table key pressed", zap.String("key", event.Name()))
@@ -478,6 +481,7 @@ func (rt *ResourcesTab) loadLambdaFunctions() ([]Resource, error) {
 				"CodeSize":         d.CodeSize,
 				"SnapStartEnabled": d.SnapStartEnabled,
 				"SnapStartStatus":  d.SnapStartStatus,
+				"LogGroupName":     d.LogGroupName,
 			},
 			SnapStartEnabled: d.SnapStartEnabled,
 		}
@@ -616,6 +620,7 @@ func (rt *ResourcesTab) onResourceHighlighted(row, column int) {
 	}
 
 	resource := rt.filteredRes[row-1]
+	rt.selectedRes = &resource
 	rt.updateResourceDetails(&resource)
 }
 
@@ -738,6 +743,39 @@ func (rt *ResourcesTab) Refresh() {
 // GetView returns the main view component
 func (rt *ResourcesTab) GetView() tview.Primitive {
 	return rt.view
+}
+
+func (rt *ResourcesTab) onLambdaLogsKey() {
+	logger.Info("onLambdaLogsKey called", zap.String("selectedService", rt.selectedService))
+	if rt.selectedService != "lambda" {
+		logger.Info("Not lambda service, ignoring")
+		return
+	}
+
+	if rt.selectedRes == nil {
+		logger.Info("No resource selected")
+		return
+	}
+
+	logGroup := ""
+	if v, ok := rt.selectedRes.Details["LogGroupName"]; ok {
+		if s, ok := v.(string); ok {
+			logGroup = s
+		}
+	}
+
+	if logGroup == "" {
+		logGroup = fmt.Sprintf("/aws/lambda/%s", rt.selectedRes.Name)
+	}
+
+	logger.Info("Emitting EventShowLambdaLogs", zap.String("function", rt.selectedRes.Name), zap.String("logGroup", logGroup))
+	if rt.eventChan != nil {
+		data := map[string]string{
+			"function": rt.selectedRes.Name,
+			"logGroup": logGroup,
+		}
+		rt.eventChan <- Event{Type: EventShowLambdaLogs, Data: data}
+	}
 }
 
 // getStringValue safely gets a string value from a pointer

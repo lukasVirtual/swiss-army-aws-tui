@@ -23,6 +23,7 @@ type LambdaFunctionDetail struct {
 	LastModified     string
 	Description      string
 	CodeSize         int64
+	LogGroupName     string
 }
 
 type LambdaService struct {
@@ -88,6 +89,7 @@ func (c *LambdaService) GetLambdaDetail(ctx context.Context) ([]LambdaFunctionDe
 			LastModified:     safeString(detail.LastModified),
 			Description:      safeString(detail.Description),
 			CodeSize:         detail.CodeSize,
+			LogGroupName:     fmt.Sprintf("/aws/lambda/%s", safeString(detail.FunctionName)),
 		})
 	}
 

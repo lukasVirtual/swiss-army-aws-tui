@@ -56,6 +56,7 @@ const (
 	EventRegionChanged  = "region_changed"
 	EventRefresh        = "refresh"
 	EventError          = "error"
+	EventShowLambdaLogs = "show_lambda_logs"
 )
 
 // NewApp creates a new TUI application
@@ -373,6 +374,15 @@ func (app *App) handleEvent(event Event) {
 	case EventError:
 		if err, ok := event.Data.(error); ok {
 			app.showError(err)
+		}
+	case EventShowLambdaLogs:
+		if data, ok := event.Data.(map[string]string); ok {
+			function := data["function"]
+			logGroup := data["logGroup"]
+			app.switchTab(2)
+			if app.logsTab != nil {
+				app.logsTab.ShowLambdaLogGroup(function, logGroup)
+			}
 		}
 	}
 }

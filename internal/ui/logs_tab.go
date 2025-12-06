@@ -30,6 +30,7 @@ type LogsTab struct {
 	mu             sync.RWMutex
 	autoScroll     bool
 	maxLines       int
+	activeLogGroup string
 }
 
 type LogEntry struct {
@@ -481,6 +482,32 @@ func (lt *LogsTab) AddApplicationLog(level, message string, fields map[string]in
 
 func (lt *LogsTab) GetView() tview.Primitive {
 	return lt.view
+}
+
+func (lt *LogsTab) ShowLambdaLogGroup(functionName, logGroup string) {
+	if lt == nil {
+		return
+	}
+
+	lt.mu.Lock()
+	lt.activeLogGroup = logGroup
+	lt.mu.Unlock()
+
+	index := -1
+	for i, source := range logSources {
+		if source.Name == "cloudwatch" && source.Enabled {
+			index = i
+			break
+		}
+	}
+
+	if index >= 0 {
+		lt.logSourceList.SetCurrentItem(index)
+		lt.selectSource("cloudwatch")
+	}
+
+	message := fmt.Sprintf("Lambda %s - CloudWatch log group: %s", functionName, logGroup)
+	lt.updateStatus(message, "blue")
 }
 
 func (lt *LogsTab) GetLogCount(source string) int {
