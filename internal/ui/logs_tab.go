@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,8 @@ import (
 	"swiss-army-tui/internal/aws/clients"
 	"swiss-army-tui/pkg/logger"
 
+	"github.com/blevesearch/bleve/v2"
+	blevequery "github.com/blevesearch/bleve/v2/search/query"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"go.uber.org/zap"
@@ -40,6 +43,10 @@ type LogsTab struct {
 	cloudWatchCtx    context.Context
 	cloudWatchCancel context.CancelFunc
 	tailingActive    bool
+
+	// Bleve search index
+	searchIndex   bleve.Index
+	searchIndexMu sync.RWMutex
 }
 
 type LogEntry struct {
@@ -72,6 +79,11 @@ func NewLogsTab() (*LogsTab, error) {
 		logs:       make(map[string][]LogEntry),
 		autoScroll: true,
 		maxLines:   1000,
+	}
+
+	// Initialize Bleve search index
+	if err := tab.initializeSearchIndex(); err != nil {
+		logger.Warn("Failed to initialize search index", zap.Error(err))
 	}
 
 	if err := tab.initializeUI(); err != nil {
@@ -335,7 +347,272 @@ func (lt *LogsTab) applyFilter() {
 }
 
 func (lt *LogsTab) onFilterChanged(text string) {
-	lt.applyFilter()
+	// Check if this looks like a search query (contains advanced operators)
+	if strings.Contains(text, " ") || strings.Contains(text, "\"") || strings.Contains(text, "*") {
+		lt.performSearch(text)
+	} else {
+		lt.applyFilter()
+	}
+}
+
+// initializeSearchIndex creates a Bleve index for fast log searching
+func (lt *LogsTab) initializeSearchIndex() error {
+	// Create a memory-based index for now (could be persisted later)
+	mapping := bleve.NewIndexMapping()
+
+	// Custom field mapping for better search performance
+	logEntryMapping := bleve.NewDocumentMapping()
+
+	// Message field - should be analyzed and searchable
+	messageFieldMapping := bleve.NewTextFieldMapping()
+	messageFieldMapping.Analyzer = "standard"
+	messageFieldMapping.Store = true
+	messageFieldMapping.Index = true
+	logEntryMapping.AddFieldMappingsAt("Message", messageFieldMapping)
+
+	// Level field - exact match for filtering
+	levelFieldMapping := bleve.NewTextFieldMapping()
+	levelFieldMapping.Analyzer = "keyword"
+	levelFieldMapping.Store = true
+	levelFieldMapping.Index = true
+	logEntryMapping.AddFieldMappingsAt("Level", levelFieldMapping)
+
+	// Source field - exact match
+	sourceFieldMapping := bleve.NewTextFieldMapping()
+	sourceFieldMapping.Analyzer = "keyword"
+	sourceFieldMapping.Store = true
+	sourceFieldMapping.Index = true
+	logEntryMapping.AddFieldMappingsAt("Source", sourceFieldMapping)
+
+	// Timestamp field - for date range queries
+	timestampFieldMapping := bleve.NewNumericFieldMapping()
+	timestampFieldMapping.Store = true
+	timestampFieldMapping.Index = true
+	logEntryMapping.AddFieldMappingsAt("Timestamp", timestampFieldMapping)
+
+	mapping.AddDocumentMapping("_default", logEntryMapping)
+
+	// Create index in memory
+	index, err := bleve.NewMemOnly(mapping)
+	if err != nil {
+		return fmt.Errorf("failed to create search index: %w", err)
+	}
+
+	lt.searchIndexMu.Lock()
+	lt.searchIndex = index
+	lt.searchIndexMu.Unlock()
+
+	logger.Info("Search index initialized successfully")
+	return nil
+}
+
+// indexLogEntry adds a log entry to the search index
+func (lt *LogsTab) indexLogEntry(entry LogEntry) {
+	lt.searchIndexMu.RLock()
+	index := lt.searchIndex
+	lt.searchIndexMu.RUnlock()
+
+	if index == nil {
+		return
+	}
+
+	// Create a unique ID for the entry
+	id := fmt.Sprintf("%s_%d_%s", entry.Source, entry.Timestamp.UnixNano(), entry.Message[:min(50, len(entry.Message))])
+
+	// Index the document
+	err := index.Index(id, entry)
+	if err != nil {
+		logger.Debug("Failed to index log entry", zap.Error(err))
+	}
+}
+
+// performSearch executes a search query using Bleve
+func (lt *LogsTab) performSearch(queryStr string) {
+	lt.searchIndexMu.RLock()
+	index := lt.searchIndex
+	lt.searchIndexMu.RUnlock()
+
+	if index == nil {
+		lt.updateStatus("Search index not available", "red")
+		return
+	}
+
+	// Create a query based on the input
+	query := lt.buildSearchQuery(queryStr)
+	if query == nil {
+		lt.applyFilter() // Fallback to basic filter
+		return
+	}
+
+	// Create search request
+	searchRequest := bleve.NewSearchRequest(query)
+	searchRequest.Size = 1000 // Limit results
+	searchRequest.Highlight = bleve.NewHighlight()
+
+	// Execute search
+	searchResults, err := index.Search(searchRequest)
+	if err != nil {
+		logger.Error("Search failed", zap.Error(err))
+		lt.updateStatus(fmt.Sprintf("Search error: %s", err.Error()), "red")
+		return
+	}
+
+	// Convert results to LogEntry
+	lt.mu.Lock()
+	defer lt.mu.Unlock()
+
+	var searchResultsEntries []LogEntry
+	for _, hit := range searchResults.Hits {
+		// Try to find the original log entry
+		if entry := lt.findLogEntryByID(hit.ID); entry != nil {
+			searchResultsEntries = append(searchResultsEntries, *entry)
+		}
+	}
+
+	// Update display with search results
+	lt.filteredLogs = searchResultsEntries
+	lt.updateLogDisplayFromFiltered()
+
+	// Update status
+	status := fmt.Sprintf("Found %d results for '%s'", len(searchResultsEntries), queryStr)
+	lt.updateStatus(status, "green")
+}
+
+// buildSearchQuery creates a Bleve query from the search string
+func (lt *LogsTab) buildSearchQuery(queryStr string) blevequery.Query {
+	if strings.TrimSpace(queryStr) == "" {
+		return nil
+	}
+
+	// Simple query string query for complex searches
+	if strings.Contains(queryStr, " ") || strings.Contains(queryStr, "\"") || strings.Contains(queryStr, "*") {
+		return blevequery.NewQueryStringQuery(queryStr)
+	}
+
+	// For single terms, create a match query that searches multiple fields
+	messageQuery := blevequery.NewMatchQuery(queryStr)
+	messageQuery.SetField("Message")
+
+	levelQuery := blevequery.NewMatchQuery(queryStr)
+	levelQuery.SetField("Level")
+
+	sourceQuery := blevequery.NewMatchQuery(queryStr)
+	sourceQuery.SetField("Source")
+
+	timestampQuery := blevequery.NewMatchQuery(queryStr)
+	timestampQuery.SetField("Timestamp")
+
+	return blevequery.NewDisjunctionQuery([]blevequery.Query{
+		messageQuery,
+		levelQuery,
+		sourceQuery,
+		timestampQuery,
+	})
+}
+
+// findLogEntryByID finds a log entry by its unique ID
+func (lt *LogsTab) findLogEntryByID(id string) *LogEntry {
+	lt.mu.RLock()
+	defer lt.mu.RUnlock()
+
+	// Parse ID to extract timestamp and source
+	parts := strings.Split(id, "_")
+	if len(parts) < 3 {
+		return nil
+	}
+
+	source := parts[0]
+	var timestamp time.Time
+	if len(parts) > 1 {
+		if parsed, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
+			timestamp = time.Unix(0, parsed)
+		}
+	}
+
+	// Find the entry in the logs
+	for _, entries := range lt.logs {
+		for _, entry := range entries {
+			if entry.Source == source && entry.Timestamp.Equal(timestamp) {
+				// Check if message matches (partial match for first 50 chars)
+				if len(entry.Message) > 50 && len(parts) >= 3 {
+					if entry.Message[:50] == strings.Join(parts[2:], "_") {
+						return &entry
+					}
+				} else if entry.Message == strings.Join(parts[2:], "_") {
+					return &entry
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// updateLogDisplayFromFiltered updates the display using filteredLogs
+func (lt *LogsTab) updateLogDisplayFromFiltered() {
+	if lt.logView == nil {
+		return
+	}
+	lt.logView.Clear()
+
+	var logText strings.Builder
+
+	for _, log := range lt.filteredLogs {
+		levelColor := "white"
+		switch strings.ToUpper(log.Level) {
+		case "ERROR", "FATAL":
+			levelColor = "red"
+		case "WARN", "WARNING":
+			levelColor = "yellow"
+		case "INFO":
+			levelColor = "green"
+		case "DEBUG":
+			levelColor = "blue"
+		}
+
+		timestamp := log.Timestamp.Format("15:04:05.000")
+		logText.WriteString(fmt.Sprintf("[gray]%s[-] [%s]%-5s[-] %s\n",
+			timestamp, levelColor, strings.ToUpper(log.Level), log.Message))
+
+		if len(log.Fields) > 0 {
+			var fieldKeys []string
+			for key := range log.Fields {
+				fieldKeys = append(fieldKeys, key)
+			}
+			sort.Strings(fieldKeys)
+
+			for _, key := range fieldKeys {
+				logText.WriteString(fmt.Sprintf("  [blue]%s:[-] %v\n", key, log.Fields[key]))
+			}
+		}
+	}
+
+	lt.logView.SetText(logText.String())
+
+	if lt.autoScroll {
+		lt.logView.ScrollToEnd()
+	}
+
+	title := fmt.Sprintf(" Logs (%d", len(lt.filteredLogs))
+	if len(lt.filteredLogs) != len(lt.logs[lt.selectedSource]) {
+		title += fmt.Sprintf(" of %d", len(lt.logs[lt.selectedSource]))
+	}
+	title += ") "
+	lt.logView.SetTitle(title)
+}
+
+// clearSearchIndex clears the search index
+func (lt *LogsTab) clearSearchIndex() {
+	lt.searchIndexMu.Lock()
+	defer lt.searchIndexMu.Unlock()
+
+	if lt.searchIndex != nil {
+		lt.searchIndex.Close()
+		lt.searchIndex = nil
+	}
+
+	// Reinitialize
+	lt.initializeSearchIndex()
 }
 
 func (lt *LogsTab) addLogEntry(sourceName string, entry LogEntry) {
@@ -346,14 +623,19 @@ func (lt *LogsTab) addLogEntry(sourceName string, entry LogEntry) {
 		lt.logs[sourceName] = []LogEntry{}
 	}
 
+	// Add to logs
 	lt.logs[sourceName] = append(lt.logs[sourceName], entry)
+
+	// Index the entry for fast search
+	go lt.indexLogEntry(entry)
+
+	// Update display if this is the current source
+	if sourceName == lt.selectedSource {
+		lt.applyFilter()
+	}
 
 	if len(lt.logs[sourceName]) > lt.maxLines {
 		lt.logs[sourceName] = lt.logs[sourceName][len(lt.logs[sourceName])-lt.maxLines:]
-	}
-
-	if lt.selectedSource == sourceName {
-		lt.updateLogDisplay(lt.logs[sourceName])
 	}
 }
 
@@ -368,31 +650,31 @@ func (lt *LogsTab) initializeAppLogs() {
 		},
 		{
 			Timestamp: time.Now().Add(-4 * time.Minute),
-			Level:     "INFO",
-			Message:   "AWS profile manager initialized",
+			Level:     "DEBUG",
+			Message:   "Loading configuration from config.yaml",
 			Source:    "app",
-			Fields:    map[string]interface{}{"profiles_found": 3},
+			Fields:    map[string]interface{}{"config_file": "config.yaml"},
 		},
 		{
 			Timestamp: time.Now().Add(-3 * time.Minute),
-			Level:     "DEBUG",
-			Message:   "Loading configuration from file",
+			Level:     "WARN",
+			Message:   "Deprecated API endpoint used",
 			Source:    "app",
-			Fields:    map[string]interface{}{"config_path": "~/.swiss-army-tui/config.yaml"},
+			Fields:    map[string]interface{}{"endpoint": "/old-api", "replacement": "/new-api"},
 		},
 		{
 			Timestamp: time.Now().Add(-2 * time.Minute),
-			Level:     "INFO",
-			Message:   "TUI application initialized successfully",
+			Level:     "ERROR",
+			Message:   "Database connection failed",
 			Source:    "app",
-			Fields:    map[string]interface{}{"tabs_created": 4},
+			Fields:    map[string]interface{}{"error": "connection timeout", "retry_count": 3},
 		},
 		{
 			Timestamp: time.Now().Add(-1 * time.Minute),
-			Level:     "WARN",
-			Message:   "Failed to load some AWS profiles",
+			Level:     "INFO",
+			Message:   "Database connection re-established",
 			Source:    "app",
-			Fields:    map[string]interface{}{"error": "credentials file not found"},
+			Fields:    map[string]interface{}{"connection_time": "150ms"},
 		},
 		{
 			Timestamp: time.Now(),
@@ -752,7 +1034,16 @@ func (lt *LogsTab) ExportLogs(filename string) error {
 	return nil
 }
 
-// Cleanup stops any active tailing processes
+// Cleanup stops any active tailing processes and closes the search index
 func (lt *LogsTab) Cleanup() {
 	lt.stopTailing()
+
+	lt.searchIndexMu.Lock()
+	defer lt.searchIndexMu.Unlock()
+
+	if lt.searchIndex != nil {
+		lt.searchIndex.Close()
+		lt.searchIndex = nil
+		logger.Info("Search index closed")
+	}
 }
