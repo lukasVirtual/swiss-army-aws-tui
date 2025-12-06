@@ -57,7 +57,7 @@ func NewClient(profile, region string) (*Client, error) {
 		config.WithRegion(region),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
+		return nil, fmt.Errorf("failed to load AWS config for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
 	}
 
 	client := &Client{
@@ -71,7 +71,7 @@ func NewClient(profile, region string) (*Client, error) {
 	}
 
 	if err := client.loadCallerIdentity(ctx); err != nil {
-		return nil, fmt.Errorf("failed to get caller identity: %w", err)
+		return nil, fmt.Errorf("failed to get caller identity for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
 	}
 
 	logger.Info("AWS client created successfully",
@@ -252,7 +252,7 @@ func (c *Client) SwitchProfile(profile, region string) error {
 		config.WithRegion(region),
 	)
 	if err != nil {
-		return fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
+		return fmt.Errorf("failed to load AWS config for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
 	}
 
 	c.mu.Lock()
@@ -266,7 +266,7 @@ func (c *Client) SwitchProfile(profile, region string) error {
 	}
 
 	if err := c.loadCallerIdentity(ctx); err != nil {
-		return fmt.Errorf("failed to get caller identity for new profile: %w", err)
+		return fmt.Errorf("failed to get caller identity for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
 	}
 
 	logger.Info("AWS profile switched successfully",
@@ -287,7 +287,7 @@ func (c *Client) TestConnection(ctx context.Context) error {
 
 	_, err := c.clients.STS.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		return fmt.Errorf("AWS connection test failed: %w", err)
+		return fmt.Errorf("AWS connection test failed for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", c.GetProfile(), c.GetProfile(), err)
 	}
 
 	return nil
