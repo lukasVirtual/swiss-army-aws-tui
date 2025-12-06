@@ -12,8 +12,7 @@ import (
 	"swiss-army-tui/internal/aws"
 	"swiss-army-tui/pkg/logger"
 
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	"go.uber.org/zap"
@@ -304,60 +303,16 @@ func (rt *ResourcesTab) loadEC2Instances() ([]Resource, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	clients := rt.awsClient.GetClients()
-	if clients == nil || clients.EC2 == nil {
-		return nil, fmt.Errorf("EC2 client not available")
-	}
-
-	result, err := clients.EC2.DescribeInstances(ctx, &ec2.DescribeInstancesInput{})
+	instances, err := rt.awsClient.GetEC2FunctionDetails(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe instances: %w", err)
 	}
 
 	var resources []Resource
 
-	for _, reservation := range result.Reservations {
-		for _, instance := range reservation.Instances {
-			resource := Resource{
-				ID:     *instance.InstanceId,
-				Type:   "EC2 Instance",
-				State:  string(instance.State.Name),
-				Region: rt.awsClient.GetRegion(),
-			}
-
-			if instance.LaunchTime != nil {
-				resource.CreatedDate = instance.LaunchTime.Format("2006-01-02 15:04:05")
-			}
-
-			// Extract name from tags
-			resource.Tags = make(map[string]string)
-			for _, tag := range instance.Tags {
-				if tag.Key != nil && tag.Value != nil {
-					resource.Tags[*tag.Key] = *tag.Value
-					if *tag.Key == "Name" {
-						resource.Name = *tag.Value
-					}
-				}
-			}
-
-			if resource.Name == "" {
-				resource.Name = resource.ID
-			}
-
-			// Store additional details
-			resource.Details = map[string]interface{}{
-				"InstanceType":     string(instance.InstanceType),
-				"ImageId":          getStringValue(instance.ImageId),
-				"VpcId":            getStringValue(instance.VpcId),
-				"SubnetId":         getStringValue(instance.SubnetId),
-				"PublicIpAddress":  getStringValue(instance.PublicIpAddress),
-				"PrivateIpAddress": getStringValue(instance.PrivateIpAddress),
-				"KeyName":          getStringValue(instance.KeyName),
-				"SecurityGroups":   instance.SecurityGroups,
-			}
-
-			resources = append(resources, resource)
-		}
+	for _, instance := range instances {
+		res := ec2InstanceToResource(instance, rt.awsClient.GetRegion())
+		resources = append(resources, res)
 	}
 
 	return resources, nil
@@ -368,42 +323,34 @@ func (rt *ResourcesTab) loadS3Buckets() ([]Resource, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	clients := rt.awsClient.GetClients()
-	if clients == nil || clients.S3 == nil {
-		return nil, fmt.Errorf("S3 client not available")
-	}
-
-	result, err := clients.S3.ListBuckets(ctx, &s3.ListBucketsInput{})
+	details, err := rt.awsClient.GetS3FunctionDetails(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list buckets: %w", err)
 	}
 
 	var resources []Resource
 
-	for i, bucket := range result.Buckets {
+	for i, detail := range details {
+		region := detail.Region
+		if region == "" {
+			region = rt.awsClient.GetRegion()
+		}
+
 		resource := Resource{
 			ID:     strconv.Itoa(i),
-			Name:   *bucket.Name,
+			Name:   detail.Name,
 			Type:   "S3 Bucket",
 			State:  "Available",
-			Region: rt.awsClient.GetRegion(),
+			Region: region,
 			Tags:   make(map[string]string),
 		}
 
-		if bucket.CreationDate != nil {
-			resource.CreatedDate = bucket.CreationDate.Format("2006-01-02 15:04:05")
-		}
-
-		// Get bucket location
-		locationResult, err := clients.S3.GetBucketLocation(ctx, &s3.GetBucketLocationInput{
-			Bucket: bucket.Name,
-		})
-		if err == nil && locationResult.LocationConstraint != "" {
-			resource.Region = string(locationResult.LocationConstraint)
+		if detail.CreationDate != nil {
+			resource.CreatedDate = detail.CreationDate.Format("2006-01-02 15:04:05")
 		}
 
 		resource.Details = map[string]interface{}{
-			"BucketName": *bucket.Name,
+			"BucketName": detail.Name,
 		}
 
 		resources = append(resources, resource)
@@ -412,21 +359,88 @@ func (rt *ResourcesTab) loadS3Buckets() ([]Resource, error) {
 	return resources, nil
 }
 
-// loadRDSInstances loads RDS instances (placeholder)
+func ec2InstanceToResource(instance types.Instance, region string) Resource {
+	res := Resource{
+		Type:   "EC2 Instance",
+		State:  string(instance.State.Name),
+		Region: region,
+		Tags:   make(map[string]string),
+	}
+
+	if instance.InstanceId != nil {
+		res.ID = *instance.InstanceId
+	}
+
+	if instance.LaunchTime != nil {
+		res.CreatedDate = instance.LaunchTime.Format("2006-01-02 15:04:05")
+	}
+
+	for _, tag := range instance.Tags {
+		if tag.Key != nil && tag.Value != nil {
+			res.Tags[*tag.Key] = *tag.Value
+			if *tag.Key == "Name" {
+				res.Name = *tag.Value
+			}
+		}
+	}
+
+	if res.Name == "" {
+		res.Name = res.ID
+	}
+
+	res.Details = map[string]interface{}{
+		"InstanceType":     string(instance.InstanceType),
+		"ImageId":          getStringValue(instance.ImageId),
+		"VpcId":            getStringValue(instance.VpcId),
+		"SubnetId":         getStringValue(instance.SubnetId),
+		"PublicIpAddress":  getStringValue(instance.PublicIpAddress),
+		"PrivateIpAddress": getStringValue(instance.PrivateIpAddress),
+		"KeyName":          getStringValue(instance.KeyName),
+		"SecurityGroups":   instance.SecurityGroups,
+	}
+
+	return res
+}
+
+// loadRDSInstances loads RDS instances using the RDS service wrapper
 func (rt *ResourcesTab) loadRDSInstances() ([]Resource, error) {
-	// Placeholder implementation
-	return []Resource{
-		{
-			ID:          "rds-example-1",
-			Name:        "Example RDS Instance",
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	details, err := rt.awsClient.GetRDSFunctionDetails(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to describe RDS instances: %w", err)
+	}
+
+	var resources []Resource
+	for _, d := range details {
+		createdDate := ""
+		if d.InstanceCreateTime != nil {
+			createdDate = d.InstanceCreateTime.Format("2006-01-02 15:04:05")
+		}
+
+		resource := Resource{
+			ID:          d.DBInstanceIdentifier,
+			Name:        d.DBInstanceIdentifier,
 			Type:        "RDS Instance",
-			State:       "Available",
+			State:       d.DBInstanceStatus,
 			Region:      rt.awsClient.GetRegion(),
-			CreatedDate: time.Now().Format("2006-01-02 15:04:05"),
+			CreatedDate: createdDate,
 			Tags:        make(map[string]string),
-			Details:     map[string]interface{}{"Note": "RDS implementation coming soon"},
-		},
-	}, nil
+			Details:     make(map[string]interface{}),
+		}
+
+		// Add additional details
+		resource.Details["Engine"] = d.Engine
+		resource.Details["Engine Version"] = d.EngineVersion
+		resource.Details["Status"] = d.DBInstanceStatus
+		resource.Details["Endpoint"] = d.Endpoint
+		resource.Details["Allocated Storage (GB)"] = d.AllocatedStorage
+
+		resources = append(resources, resource)
+	}
+
+	return resources, nil
 }
 
 // loadLambdaFunctions loads Lambda functions using the Lambda service wrapper.

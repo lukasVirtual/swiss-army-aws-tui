@@ -16,18 +16,14 @@ import (
 	"go.uber.org/zap"
 )
 
-// LogsTab represents the logs viewing tab
 type LogsTab struct {
-	// Core components
 	view *tview.Flex
 
-	// UI components
 	logSourceList *tview.List
 	logView       *tview.TextView
 	filterInput   *tview.InputField
 	statusText    *tview.TextView
 
-	// State
 	selectedSource string
 	logs           map[string][]LogEntry
 	filteredLogs   []LogEntry
@@ -36,7 +32,6 @@ type LogsTab struct {
 	maxLines       int
 }
 
-// LogEntry represents a single log entry
 type LogEntry struct {
 	Timestamp time.Time
 	Level     string
@@ -45,7 +40,6 @@ type LogEntry struct {
 	Fields    map[string]interface{}
 }
 
-// LogSource represents a log source
 type LogSource struct {
 	Name        string
 	DisplayName string
@@ -58,12 +52,11 @@ var logSources = []LogSource{
 	{Name: "app", DisplayName: "Application Logs", Type: "memory", Path: "", Enabled: true},
 	{Name: "aws-sdk", DisplayName: "AWS SDK Logs", Type: "memory", Path: "", Enabled: false},
 	{Name: "system", DisplayName: "System Logs", Type: "file", Path: "/var/log/system.log", Enabled: false},
-	{Name: "cloudwatch", DisplayName: "CloudWatch Logs", Type: "aws", Path: "", Enabled: false},
+	{Name: "cloudwatch", DisplayName: "CloudWatch Logs", Type: "aws", Path: "", Enabled: true},
 	{Name: "docker", DisplayName: "Docker Logs", Type: "command", Path: "docker logs", Enabled: false},
 	{Name: "kubectl", DisplayName: "Kubernetes Logs", Type: "command", Path: "kubectl logs", Enabled: false},
 }
 
-// NewLogsTab creates a new logs tab
 func NewLogsTab() (*LogsTab, error) {
 	tab := &LogsTab{
 		logs:       make(map[string][]LogEntry),
@@ -75,15 +68,13 @@ func NewLogsTab() (*LogsTab, error) {
 		return nil, fmt.Errorf("failed to initialize logs tab UI: %w", err)
 	}
 
-	// Initialize with some sample application logs
 	tab.initializeAppLogs()
 
 	return tab, nil
 }
 
-// initializeUI initializes the UI components
 func (lt *LogsTab) initializeUI() error {
-	// Create log source list
+
 	lt.logSourceList = tview.NewList().
 		SetMainTextColor(tcell.ColorWhite).
 		SetSelectedTextColor(tcell.ColorBlack).
@@ -92,11 +83,9 @@ func (lt *LogsTab) initializeUI() error {
 
 	lt.logSourceList.SetBorder(true).SetTitle(" Log Sources ").SetTitleAlign(tview.AlignLeft)
 
-	// Set up log source handlers
 	lt.logSourceList.SetSelectedFunc(lt.onSourceSelected)
 	lt.logSourceList.SetChangedFunc(lt.onSourceHighlighted)
 
-	// Add key bindings for source list
 	lt.logSourceList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
 		case 'r':
@@ -115,7 +104,6 @@ func (lt *LogsTab) initializeUI() error {
 		return event
 	})
 
-	// Create filter input
 	lt.filterInput = tview.NewInputField().
 		SetLabel("Filter: ").
 		SetFieldWidth(0).
@@ -123,7 +111,6 @@ func (lt *LogsTab) initializeUI() error {
 
 	lt.filterInput.SetBorder(true).SetTitle(" Filter Logs ").SetTitleAlign(tview.AlignLeft)
 
-	// Create log view
 	lt.logView = tview.NewTextView().
 		SetDynamicColors(true).
 		SetScrollable(true).
@@ -131,7 +118,6 @@ func (lt *LogsTab) initializeUI() error {
 
 	lt.logView.SetBorder(true).SetTitle(" Logs ").SetTitleAlign(tview.AlignLeft)
 
-	// Add key bindings for log view
 	lt.logView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
 		case 'r':
@@ -156,7 +142,6 @@ func (lt *LogsTab) initializeUI() error {
 		return event
 	})
 
-	// Create status text
 	lt.statusText = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
@@ -164,10 +149,8 @@ func (lt *LogsTab) initializeUI() error {
 	lt.statusText.SetBorder(true).SetTitle(" Status ").SetTitleAlign(tview.AlignLeft)
 	lt.updateStatus("Ready", "green")
 
-	// Load sources into list
 	lt.loadLogSources()
 
-	// Create layout
 	leftPanel := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(lt.logSourceList, 0, 2, true).
 		AddItem(lt.filterInput, 3, 0, false).
@@ -183,7 +166,6 @@ func (lt *LogsTab) initializeUI() error {
 	return nil
 }
 
-// loadLogSources loads log sources into the list
 func (lt *LogsTab) loadLogSources() {
 	lt.logSourceList.Clear()
 
@@ -203,7 +185,6 @@ func (lt *LogsTab) loadLogSources() {
 		})
 	}
 
-	// Select first available source
 	for _, source := range logSources {
 		if source.Enabled {
 			lt.selectSource(source.Name)
@@ -212,7 +193,6 @@ func (lt *LogsTab) loadLogSources() {
 	}
 }
 
-// onSourceSelected handles log source selection
 func (lt *LogsTab) onSourceSelected(index int, mainText, secondaryText string, shortcut rune) {
 	if index >= 0 && index < len(logSources) {
 		source := logSources[index]
@@ -222,16 +202,14 @@ func (lt *LogsTab) onSourceSelected(index int, mainText, secondaryText string, s
 	}
 }
 
-// onSourceHighlighted handles source highlighting
 func (lt *LogsTab) onSourceHighlighted(index int, mainText, secondaryText string, shortcut rune) {
-	// Update status or info based on highlighted source
+
 	if index >= 0 && index < len(logSources) {
 		source := logSources[index]
 		lt.updateStatus(fmt.Sprintf("Source: %s (%s)", source.DisplayName, source.Type), "blue")
 	}
 }
 
-// selectSource selects a log source and displays its logs
 func (lt *LogsTab) selectSource(sourceName string) {
 	lt.mu.Lock()
 	lt.selectedSource = sourceName
@@ -239,20 +217,25 @@ func (lt *LogsTab) selectSource(sourceName string) {
 
 	logger.Debug("Selecting log source", zap.String("source", sourceName))
 
-	// Load logs for the selected source
 	lt.loadLogsForSource(sourceName)
 }
 
-// loadLogsForSource loads logs for a specific source
 func (lt *LogsTab) loadLogsForSource(sourceName string) {
 	lt.mu.RLock()
 	logs, exists := lt.logs[sourceName]
 	lt.mu.RUnlock()
 
 	if !exists {
-		// Initialize empty logs for this source
+
 		lt.mu.Lock()
-		lt.logs[sourceName] = []LogEntry{}
+		switch sourceName {
+		case "cloudwatch":
+			logger.Info("Cloudwatch logs activated...")
+			lt.logs[sourceName] = []LogEntry{}
+		default:
+			lt.logs[sourceName] = []LogEntry{}
+
+		}
 		lt.mu.Unlock()
 		logs = []LogEntry{}
 	}
@@ -261,18 +244,16 @@ func (lt *LogsTab) loadLogsForSource(sourceName string) {
 	lt.updateStatus(fmt.Sprintf("Showing %d log entries from %s", len(logs), sourceName), "green")
 }
 
-// updateLogDisplay updates the log display with the given logs
 func (lt *LogsTab) updateLogDisplay(logs []LogEntry) {
 	lt.filteredLogs = logs
 	lt.applyFilter()
 }
 
-// applyFilter applies the current filter to logs
 func (lt *LogsTab) applyFilter() {
 	if lt.filterInput == nil || lt.logView == nil {
 		return
 	}
-	lt.logView.Clear() // Clear existing logs to prevent duplication
+	lt.logView.Clear()
 
 	filterText := strings.ToLower(strings.TrimSpace(lt.filterInput.GetText()))
 
@@ -289,16 +270,14 @@ func (lt *LogsTab) applyFilter() {
 		}
 	}
 
-	// Sort logs by timestamp
 	sort.Slice(filtered, func(i, j int) bool {
 		return filtered[i].Timestamp.Before(filtered[j].Timestamp)
 	})
 
-	// Convert to display text
 	var logText strings.Builder
 
 	for _, log := range filtered {
-		// Color-code log levels
+
 		levelColor := "white"
 		switch strings.ToUpper(log.Level) {
 		case "ERROR", "FATAL":
@@ -315,7 +294,6 @@ func (lt *LogsTab) applyFilter() {
 		logText.WriteString(fmt.Sprintf("[gray]%s[-] [%s]%-5s[-] %s\n",
 			timestamp, levelColor, strings.ToUpper(log.Level), log.Message))
 
-		// Add fields if any
 		if len(log.Fields) > 0 {
 			var fieldKeys []string
 			for key := range log.Fields {
@@ -331,12 +309,10 @@ func (lt *LogsTab) applyFilter() {
 
 	lt.logView.SetText(logText.String())
 
-	// Auto-scroll to bottom if enabled
 	if lt.autoScroll {
 		lt.logView.ScrollToEnd()
 	}
 
-	// Update title with count
 	title := fmt.Sprintf(" Logs (%d", len(filtered))
 	if len(filtered) != len(lt.filteredLogs) {
 		title += fmt.Sprintf(" of %d", len(lt.filteredLogs))
@@ -345,12 +321,10 @@ func (lt *LogsTab) applyFilter() {
 	lt.logView.SetTitle(title)
 }
 
-// onFilterChanged handles filter text changes
 func (lt *LogsTab) onFilterChanged(text string) {
 	lt.applyFilter()
 }
 
-// addLogEntry adds a new log entry to a specific source
 func (lt *LogsTab) addLogEntry(sourceName string, entry LogEntry) {
 	lt.mu.Lock()
 	defer lt.mu.Unlock()
@@ -361,18 +335,15 @@ func (lt *LogsTab) addLogEntry(sourceName string, entry LogEntry) {
 
 	lt.logs[sourceName] = append(lt.logs[sourceName], entry)
 
-	// Limit the number of log entries to prevent memory issues
 	if len(lt.logs[sourceName]) > lt.maxLines {
 		lt.logs[sourceName] = lt.logs[sourceName][len(lt.logs[sourceName])-lt.maxLines:]
 	}
 
-	// Update display if this is the currently selected source
 	if lt.selectedSource == sourceName {
 		lt.updateLogDisplay(lt.logs[sourceName])
 	}
 }
 
-// initializeAppLogs initializes sample application logs
 func (lt *LogsTab) initializeAppLogs() {
 	sampleLogs := []LogEntry{
 		{
@@ -424,7 +395,6 @@ func (lt *LogsTab) initializeAppLogs() {
 	lt.mu.Unlock()
 }
 
-// clearLogs clears logs for the current source
 func (lt *LogsTab) clearLogs() {
 	lt.mu.Lock()
 	defer lt.mu.Unlock()
@@ -436,7 +406,6 @@ func (lt *LogsTab) clearLogs() {
 	}
 }
 
-// toggleAutoScroll toggles auto-scroll functionality
 func (lt *LogsTab) toggleAutoScroll() {
 	lt.autoScroll = !lt.autoScroll
 	status := "disabled"
@@ -447,17 +416,15 @@ func (lt *LogsTab) toggleAutoScroll() {
 	lt.updateStatus(fmt.Sprintf("Auto-scroll %s", status), "blue")
 }
 
-// focusFilter focuses on the filter input field
 func (lt *LogsTab) focusFilter() {
-	// This would be called from the application level
+
 }
 
-// updateStatus updates the status display
 func (lt *LogsTab) updateStatus(message, color string) {
 	if lt.statusText == nil {
 		return
 	}
-	lt.statusText.Clear() // Clear existing status to prevent duplication
+	lt.statusText.Clear()
 
 	timestamp := time.Now().Format("15:04:05")
 
@@ -471,7 +438,6 @@ func (lt *LogsTab) updateStatus(message, color string) {
 	lt.statusText.SetText(statusText)
 }
 
-// Refresh refreshes the current log source
 func (lt *LogsTab) Refresh() {
 	lt.mu.RLock()
 	source := lt.selectedSource
@@ -486,7 +452,7 @@ func (lt *LogsTab) Refresh() {
 
 	switch source {
 	case "app":
-		// Add a new refresh log entry
+
 		lt.addLogEntry("app", LogEntry{
 			Timestamp: time.Now(),
 			Level:     "INFO",
@@ -495,14 +461,13 @@ func (lt *LogsTab) Refresh() {
 			Fields:    map[string]interface{}{"action": "refresh"},
 		})
 	default:
-		// For other sources, just reload existing logs
+
 		lt.loadLogsForSource(source)
 	}
 
 	lt.updateStatus("Logs refreshed", "green")
 }
 
-// AddApplicationLog adds a log entry to the application logs
 func (lt *LogsTab) AddApplicationLog(level, message string, fields map[string]interface{}) {
 	entry := LogEntry{
 		Timestamp: time.Now(),
@@ -514,12 +479,10 @@ func (lt *LogsTab) AddApplicationLog(level, message string, fields map[string]in
 	lt.addLogEntry("app", entry)
 }
 
-// GetView returns the main view component
 func (lt *LogsTab) GetView() tview.Primitive {
 	return lt.view
 }
 
-// GetLogCount returns the number of logs for a specific source
 func (lt *LogsTab) GetLogCount(source string) int {
 	lt.mu.RLock()
 	defer lt.mu.RUnlock()
@@ -530,7 +493,6 @@ func (lt *LogsTab) GetLogCount(source string) int {
 	return 0
 }
 
-// ExportLogs exports logs to a file (placeholder)
 func (lt *LogsTab) ExportLogs(filename string) error {
 	lt.mu.RLock()
 	defer lt.mu.RUnlock()
@@ -544,7 +506,6 @@ func (lt *LogsTab) ExportLogs(filename string) error {
 	writer := bufio.NewWriter(file)
 	defer writer.Flush()
 
-	// Export all logs from current source
 	if logs, exists := lt.logs[lt.selectedSource]; exists {
 		for _, log := range logs {
 			line := fmt.Sprintf("%s [%s] %s\n",

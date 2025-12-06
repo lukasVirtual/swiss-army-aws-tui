@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
@@ -20,7 +21,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// ServiceClients holds all AWS service clients
 type ServiceClients struct {
 	EC2    *ec2.Client
 	S3     *s3.Client
@@ -30,20 +30,20 @@ type ServiceClients struct {
 	STS    *sts.Client
 }
 
-// Client represents an AWS client manager
 type Client struct {
 	mu            sync.RWMutex
 	config        aws.Config
 	clients       *ServiceClients
 	lambdaService *clients.LambdaService
 	s3Service     *clients.S3Service
+	ec2Service    *clients.EC2Service
+	rdsService    *clients.RDSService
 	profile       string
 	region        string
 	accountID     string
 	userIdentity  *sts.GetCallerIdentityOutput
 }
 
-// NewClient creates a new AWS client with the specified profile
 func NewClient(profile, region string) (*Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -52,7 +52,6 @@ func NewClient(profile, region string) (*Client, error) {
 		zap.String("profile", profile),
 		zap.String("region", region))
 
-	// Load AWS config
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithSharedConfigProfile(profile),
 		config.WithRegion(region),
@@ -67,12 +66,10 @@ func NewClient(profile, region string) (*Client, error) {
 		region:  region,
 	}
 
-	// Initialize service clients
 	if err := client.initializeClients(); err != nil {
 		return nil, fmt.Errorf("failed to initialize AWS service clients: %w", err)
 	}
 
-	// Get caller identity
 	if err := client.loadCallerIdentity(ctx); err != nil {
 		return nil, fmt.Errorf("failed to get caller identity: %w", err)
 	}
@@ -85,7 +82,6 @@ func NewClient(profile, region string) (*Client, error) {
 	return client, nil
 }
 
-// initializeClients initializes all AWS service clients
 func (c *Client) initializeClients() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -99,10 +95,6 @@ func (c *Client) initializeClients() error {
 		STS:    sts.NewFromConfig(c.config),
 	}
 
-	// Initialize higher-level service wrappers that depend on the raw SDK clients.
-	// Create Lambda service wrapper by passing the already-created raw Lambda SDK client
-	// (c.clients.Lambda). This avoids an import cycle because the clients package only
-	// depends on the raw AWS SDK, not on this aws package.
 	if c.clients != nil && c.clients.Lambda != nil {
 		lambdaSvc, err := clients.NewLambdaService(c.clients.Lambda)
 		if err != nil {
@@ -124,10 +116,32 @@ func (c *Client) initializeClients() error {
 	} else {
 		logger.Debug("S3 SDK client not initialized; skipping S3 service wrapper")
 	}
+
+	if c.clients != nil && c.clients.EC2 != nil {
+		EC2Svc, err := clients.NewEC2Service(c.clients.EC2)
+		if err != nil {
+			logger.Debug("failed to initialize EC2 service wrapper", zap.Error(err))
+		} else {
+			c.ec2Service = EC2Svc
+		}
+	} else {
+		logger.Debug("EC2 SDK client not initialized; skipping EC2 service wrapper")
+	}
+
+	if c.clients != nil && c.clients.RDS != nil {
+		RDSSvc, err := clients.NewRDSService(c.clients.RDS)
+		if err != nil {
+			logger.Debug("failed to initialize RDS service wrapper", zap.Error(err))
+		} else {
+			c.rdsService = RDSSvc
+		}
+	} else {
+		logger.Debug("RDS SDK client not initialized; skipping RDS service wrapper")
+	}
+
 	return nil
 }
 
-// loadCallerIdentity loads the caller identity and account information
 func (c *Client) loadCallerIdentity(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -145,43 +159,36 @@ func (c *Client) loadCallerIdentity(ctx context.Context) error {
 	return nil
 }
 
-// GetProfile returns the current AWS profile
 func (c *Client) GetProfile() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.profile
 }
 
-// GetRegion returns the current AWS region
 func (c *Client) GetRegion() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.region
 }
 
-// GetAccountID returns the current AWS account ID
 func (c *Client) GetAccountID() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.accountID
 }
 
-// GetUserIdentity returns the caller identity information
 func (c *Client) GetUserIdentity() *sts.GetCallerIdentityOutput {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.userIdentity
 }
 
-// GetClients returns the service clients
 func (c *Client) GetClients() *ServiceClients {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.clients
 }
 
-// GetLambdaFunctionDetails returns detailed lambda function metadata via the Lambda service wrapper.
-// It returns an error if the Lambda service wrapper is not initialized.
 func (c *Client) GetLambdaFunctionDetails(ctx context.Context) ([]clients.LambdaFunctionDetail, error) {
 	c.mu.RLock()
 	svc := c.lambdaService
@@ -194,16 +201,6 @@ func (c *Client) GetLambdaFunctionDetails(ctx context.Context) ([]clients.Lambda
 	return svc.GetLambdaDetail(ctx)
 }
 
-// GetLambdaService returns the higher-level Lambda service wrapper.
-// May be nil if initialization failed.
-func (c *Client) GetLambdaService() *clients.LambdaService {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.lambdaService
-}
-
-// GetLambdaFunctionDetails returns detailed lambda function metadata via the Lambda service wrapper.
-// It returns an error if the Lambda service wrapper is not initialized.
 func (c *Client) GetS3FunctionDetails(ctx context.Context) ([]clients.S3Details, error) {
 	c.mu.RLock()
 	svc := c.s3Service
@@ -216,15 +213,31 @@ func (c *Client) GetS3FunctionDetails(ctx context.Context) ([]clients.S3Details,
 	return svc.GetS3Detail(ctx)
 }
 
-// GetS3Service returns the higher-level S3 service wrapper.
-// May be nil if initialization failed.
-func (c *Client) GetS3Service() *clients.S3Service {
+func (c *Client) GetEC2FunctionDetails(ctx context.Context) ([]types.Instance, error) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.s3Service
+	svc := c.ec2Service
+	c.mu.RUnlock()
+
+	if svc == nil {
+		return nil, fmt.Errorf("EC2 service not initialized")
+	}
+
+	return svc.GetEC2Detail(ctx)
 }
 
-// SwitchProfile switches to a different AWS profile
+// GetRDSFunctionDetails retrieves details of all RDS instances
+func (c *Client) GetRDSFunctionDetails(ctx context.Context) ([]clients.RDSDetails, error) {
+	c.mu.RLock()
+	svc := c.rdsService
+	c.mu.RUnlock()
+
+	if svc == nil {
+		return nil, fmt.Errorf("RDS service not initialized")
+	}
+
+	return svc.GetRDSDetail(ctx)
+}
+
 func (c *Client) SwitchProfile(profile, region string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -234,7 +247,6 @@ func (c *Client) SwitchProfile(profile, region string) error {
 		zap.String("to_profile", profile),
 		zap.String("region", region))
 
-	// Load new config
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithSharedConfigProfile(profile),
 		config.WithRegion(region),
@@ -249,12 +261,10 @@ func (c *Client) SwitchProfile(profile, region string) error {
 	c.region = region
 	c.mu.Unlock()
 
-	// Reinitialize clients
 	if err := c.initializeClients(); err != nil {
 		return fmt.Errorf("failed to reinitialize AWS service clients: %w", err)
 	}
 
-	// Reload caller identity
 	if err := c.loadCallerIdentity(ctx); err != nil {
 		return fmt.Errorf("failed to get caller identity for new profile: %w", err)
 	}
@@ -267,7 +277,6 @@ func (c *Client) SwitchProfile(profile, region string) error {
 	return nil
 }
 
-// TestConnection tests the AWS connection by calling STS GetCallerIdentity
 func (c *Client) TestConnection(ctx context.Context) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -284,16 +293,16 @@ func (c *Client) TestConnection(ctx context.Context) error {
 	return nil
 }
 
-// Close performs any necessary cleanup
 func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// AWS SDK v2 clients don't require explicit closing
-	// but we can clear references
 	c.clients = nil
 	c.userIdentity = nil
 	c.lambdaService = nil
+	c.s3Service = nil
+	c.ec2Service = nil
+	c.rdsService = nil
 
 	logger.Debug("AWS client closed", zap.String("profile", c.profile))
 	return nil

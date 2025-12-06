@@ -1,25 +1,22 @@
 app:
-  name: "Swiss Army TUI"
-  version: "1.0.0"
-  description: "DevOps Swiss Army Knife TUI"
-  debug: false
-
+    debug: false
+    description: DevOps Swiss Army Knife TUI
+    name: Swiss Army TUI
+    version: 1.0.0
 aws:
-  default_profile: "default"
-  default_region: "eu-central-1"
-  profiles: {}
-  config_path: ""
-  credentials_path: ""
-
-ui:
-  theme: "dark"
-  refresh_interval: 30
-  mouse_enabled: true
-  border_style: "rounded"
-
+    config_path: ""
+    credentials_path: ""
+    default_profile: default
+    default_region: eu-central-1
+    profiles: {}
 logger:
-  level: "info"
-  development: true
-  encoding: "console"
-  # output_paths:
-  #   - "stderr"
+    development: true
+    encoding: console
+    level: info
+    output_paths:
+        - swiss-army-tui.log
+ui:
+    border_style: rounded
+    mouse_enabled: true
+    refresh_interval: 30
+    theme: dark
