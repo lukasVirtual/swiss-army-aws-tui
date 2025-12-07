@@ -14,7 +14,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/aws/aws-sdk-go-v2/service/ecs"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -23,28 +22,22 @@ import (
 )
 
 type ServiceClients struct {
-	EC2            *ec2.Client
-	S3             *s3.Client
-	RDS            *rds.Client
-	ECS            *ecs.Client
-	Lambda         *lambda.Client
+	EC2            *clients.EC2Service
+	S3             *clients.S3Service
+	RDS            *clients.RDSService
+	Lambda         *clients.LambdaService
+	CloudWatchLogs *clients.CloudWatchLogsService
 	STS            *sts.Client
-	CloudWatchLogs *cloudwatchlogs.Client
 }
 
 type Client struct {
-	mu                    sync.RWMutex
-	config                aws.Config
-	clients               *ServiceClients
-	lambdaService         *clients.LambdaService
-	s3Service             *clients.S3Service
-	ec2Service            *clients.EC2Service
-	rdsService            *clients.RDSService
-	cloudWatchLogsService *clients.CloudWatchLogsService
-	profile               string
-	region                string
-	accountID             string
-	userIdentity          *sts.GetCallerIdentityOutput
+	mu           sync.RWMutex
+	config       aws.Config
+	clients      *ServiceClients
+	profile      string
+	region       string
+	accountID    string
+	userIdentity *sts.GetCallerIdentityOutput
 }
 
 func NewClient(profile, region string) (*Client, error) {
@@ -89,69 +82,28 @@ func (c *Client) initializeClients() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Initialize raw AWS SDK clients
+	ec2Client := ec2.NewFromConfig(c.config)
+	s3Client := s3.NewFromConfig(c.config)
+	rdsClient := rds.NewFromConfig(c.config)
+	lambdaClient := lambda.NewFromConfig(c.config)
+	stsClient := sts.NewFromConfig(c.config)
+	cloudWatchLogsClient := cloudwatchlogs.NewFromConfig(c.config)
+
+	// Initialize service wrappers
+	ec2Svc, _ := clients.NewEC2Service(ec2Client)
+	s3Svc, _ := clients.NewS3Service(s3Client)
+	rdsSvc, _ := clients.NewRDSService(rdsClient)
+	lambdaSvc, _ := clients.NewLambdaService(lambdaClient)
+	cloudWatchLogsSvc, _ := clients.NewCloudWatchLogsService(cloudWatchLogsClient)
+
 	c.clients = &ServiceClients{
-		EC2:            ec2.NewFromConfig(c.config),
-		S3:             s3.NewFromConfig(c.config),
-		RDS:            rds.NewFromConfig(c.config),
-		ECS:            ecs.NewFromConfig(c.config),
-		Lambda:         lambda.NewFromConfig(c.config),
-		STS:            sts.NewFromConfig(c.config),
-		CloudWatchLogs: cloudwatchlogs.NewFromConfig(c.config),
-	}
-
-	if c.clients != nil && c.clients.Lambda != nil {
-		lambdaSvc, err := clients.NewLambdaService(c.clients.Lambda)
-		if err != nil {
-			logger.Debug("failed to initialize lambda service wrapper", zap.Error(err))
-		} else {
-			c.lambdaService = lambdaSvc
-		}
-	} else {
-		logger.Debug("lambda SDK client not initialized; skipping lambda service wrapper")
-	}
-
-	if c.clients != nil && c.clients.S3 != nil {
-		S3Svc, err := clients.NewS3Service(c.clients.S3)
-		if err != nil {
-			logger.Debug("failed to initialize S3 service wrapper", zap.Error(err))
-		} else {
-			c.s3Service = S3Svc
-		}
-	} else {
-		logger.Debug("S3 SDK client not initialized; skipping S3 service wrapper")
-	}
-
-	if c.clients != nil && c.clients.EC2 != nil {
-		EC2Svc, err := clients.NewEC2Service(c.clients.EC2)
-		if err != nil {
-			logger.Debug("failed to initialize EC2 service wrapper", zap.Error(err))
-		} else {
-			c.ec2Service = EC2Svc
-		}
-	} else {
-		logger.Debug("EC2 SDK client not initialized; skipping EC2 service wrapper")
-	}
-
-	if c.clients != nil && c.clients.RDS != nil {
-		RDSSvc, err := clients.NewRDSService(c.clients.RDS)
-		if err != nil {
-			logger.Debug("failed to initialize RDS service wrapper", zap.Error(err))
-		} else {
-			c.rdsService = RDSSvc
-		}
-	} else {
-		logger.Debug("RDS SDK client not initialized; skipping RDS service wrapper")
-	}
-
-	if c.clients != nil && c.clients.CloudWatchLogs != nil {
-		cloudWatchLogsSvc, err := clients.NewCloudWatchLogsService(c.clients.CloudWatchLogs)
-		if err != nil {
-			logger.Debug("failed to initialize CloudWatch Logs service wrapper", zap.Error(err))
-		} else {
-			c.cloudWatchLogsService = cloudWatchLogsSvc
-		}
-	} else {
-		logger.Debug("CloudWatch Logs SDK client not initialized; skipping CloudWatch Logs service wrapper")
+		EC2:            ec2Svc,
+		S3:             s3Svc,
+		RDS:            rdsSvc,
+		Lambda:         lambdaSvc,
+		CloudWatchLogs: cloudWatchLogsSvc,
+		STS:            stsClient,
 	}
 
 	return nil
@@ -206,7 +158,7 @@ func (c *Client) GetClients() *ServiceClients {
 
 func (c *Client) GetLambdaFunctionDetails(ctx context.Context) ([]clients.LambdaFunctionDetail, error) {
 	c.mu.RLock()
-	svc := c.lambdaService
+	svc := c.clients.Lambda
 	c.mu.RUnlock()
 
 	if svc == nil {
@@ -218,7 +170,7 @@ func (c *Client) GetLambdaFunctionDetails(ctx context.Context) ([]clients.Lambda
 
 func (c *Client) GetS3FunctionDetails(ctx context.Context) ([]clients.S3Details, error) {
 	c.mu.RLock()
-	svc := c.s3Service
+	svc := c.clients.S3
 	c.mu.RUnlock()
 
 	if svc == nil {
@@ -230,7 +182,7 @@ func (c *Client) GetS3FunctionDetails(ctx context.Context) ([]clients.S3Details,
 
 func (c *Client) GetEC2FunctionDetails(ctx context.Context) ([]types.Instance, error) {
 	c.mu.RLock()
-	svc := c.ec2Service
+	svc := c.clients.EC2
 	c.mu.RUnlock()
 
 	if svc == nil {
@@ -243,7 +195,7 @@ func (c *Client) GetEC2FunctionDetails(ctx context.Context) ([]types.Instance, e
 // GetRDSFunctionDetails retrieves details of all RDS instances
 func (c *Client) GetRDSFunctionDetails(ctx context.Context) ([]clients.RDSDetails, error) {
 	c.mu.RLock()
-	svc := c.rdsService
+	svc := c.clients.RDS
 	c.mu.RUnlock()
 
 	if svc == nil {
@@ -256,7 +208,7 @@ func (c *Client) GetRDSFunctionDetails(ctx context.Context) ([]clients.RDSDetail
 // GetCloudWatchLogsService retrieves the CloudWatch Logs service
 func (c *Client) GetCloudWatchLogsService() *clients.CloudWatchLogsService {
 	c.mu.RLock()
-	svc := c.cloudWatchLogsService
+	svc := c.clients.CloudWatchLogs
 	c.mu.RUnlock()
 	return svc
 }
@@ -322,11 +274,6 @@ func (c *Client) Close() error {
 
 	c.clients = nil
 	c.userIdentity = nil
-	c.lambdaService = nil
-	c.s3Service = nil
-	c.ec2Service = nil
-	c.rdsService = nil
-	c.cloudWatchLogsService = nil
 
 	logger.Debug("AWS client closed", zap.String("profile", c.profile))
 	return nil

@@ -50,11 +50,12 @@ type LogsTab struct {
 }
 
 type LogEntry struct {
-	Timestamp time.Time
-	Level     string
-	Message   string
-	Source    string
-	Fields    map[string]interface{}
+	Timestamp  time.Time
+	Level      string
+	Message    string
+	Source     string
+	Fields     map[string]interface{}
+	Highlights map[string][]string // Store highlighting information
 }
 
 type LogSource struct {
@@ -316,8 +317,25 @@ func (lt *LogsTab) applyFilter() {
 		}
 
 		timestamp := log.Timestamp.Format("15:04:05.000")
+
+		// Apply highlighting to the message
+		highlightedMessage := log.Message
+		if log.Highlights != nil && len(log.Highlights["Message"]) > 0 {
+			highlightedMessage = lt.renderHighlightedText(log.Message, "", log.Highlights["Message"])
+		} else if filterText != "" {
+			highlightedMessage = lt.renderHighlightedText(log.Message, filterText, nil)
+		}
+
+		// Apply highlighting to the level if needed
+		highlightedLevel := strings.ToUpper(log.Level)
+		if log.Highlights != nil && len(log.Highlights["Level"]) > 0 {
+			highlightedLevel = lt.renderHighlightedText(highlightedLevel, "", log.Highlights["Level"])
+		} else if filterText != "" && strings.Contains(strings.ToLower(log.Level), filterText) {
+			highlightedLevel = lt.renderHighlightedText(highlightedLevel, filterText, nil)
+		}
+
 		logText.WriteString(fmt.Sprintf("[gray]%s[-] [%s]%-5s[-] %s\n",
-			timestamp, levelColor, strings.ToUpper(log.Level), log.Message))
+			timestamp, levelColor, highlightedLevel, highlightedMessage))
 
 		if len(log.Fields) > 0 {
 			var fieldKeys []string
@@ -327,7 +345,11 @@ func (lt *LogsTab) applyFilter() {
 			sort.Strings(fieldKeys)
 
 			for _, key := range fieldKeys {
-				logText.WriteString(fmt.Sprintf("  [blue]%s:[-] %v\n", key, log.Fields[key]))
+				fieldValue := fmt.Sprintf("%v", log.Fields[key])
+				if filterText != "" && strings.Contains(strings.ToLower(fieldValue), filterText) {
+					fieldValue = lt.renderHighlightedText(fieldValue, filterText, nil)
+				}
+				logText.WriteString(fmt.Sprintf("  [blue]%s:[-] %s\n", key, fieldValue))
 			}
 		}
 	}
@@ -360,31 +382,29 @@ func (lt *LogsTab) initializeSearchIndex() error {
 	// Create a memory-based index for now (could be persisted later)
 	mapping := bleve.NewIndexMapping()
 
-	// Custom field mapping for better search performance
 	logEntryMapping := bleve.NewDocumentMapping()
 
-	// Message field - should be analyzed and searchable
 	messageFieldMapping := bleve.NewTextFieldMapping()
 	messageFieldMapping.Analyzer = "standard"
 	messageFieldMapping.Store = true
 	messageFieldMapping.Index = true
+	messageFieldMapping.IncludeTermVectors = true
 	logEntryMapping.AddFieldMappingsAt("Message", messageFieldMapping)
 
-	// Level field - exact match for filtering
 	levelFieldMapping := bleve.NewTextFieldMapping()
 	levelFieldMapping.Analyzer = "keyword"
 	levelFieldMapping.Store = true
 	levelFieldMapping.Index = true
+	levelFieldMapping.IncludeTermVectors = true
 	logEntryMapping.AddFieldMappingsAt("Level", levelFieldMapping)
 
-	// Source field - exact match
 	sourceFieldMapping := bleve.NewTextFieldMapping()
 	sourceFieldMapping.Analyzer = "keyword"
 	sourceFieldMapping.Store = true
 	sourceFieldMapping.Index = true
+	sourceFieldMapping.IncludeTermVectors = true
 	logEntryMapping.AddFieldMappingsAt("Source", sourceFieldMapping)
 
-	// Timestamp field - for date range queries
 	timestampFieldMapping := bleve.NewNumericFieldMapping()
 	timestampFieldMapping.Store = true
 	timestampFieldMapping.Index = true
@@ -444,10 +464,12 @@ func (lt *LogsTab) performSearch(queryStr string) {
 		return
 	}
 
-	// Create search request
 	searchRequest := bleve.NewSearchRequest(query)
-	searchRequest.Size = 1000 // Limit results
-	searchRequest.Highlight = bleve.NewHighlight()
+	searchRequest.Size = 1000    // Limit results
+	searchRequest.Explain = true // Enable explanations for debugging
+
+	// Enhance search request for better highlighting
+	lt.enhanceSearchRequest(searchRequest)
 
 	// Execute search
 	searchResults, err := index.Search(searchRequest)
@@ -457,7 +479,6 @@ func (lt *LogsTab) performSearch(queryStr string) {
 		return
 	}
 
-	// Convert results to LogEntry
 	lt.mu.Lock()
 	defer lt.mu.Unlock()
 
@@ -465,7 +486,16 @@ func (lt *LogsTab) performSearch(queryStr string) {
 	for _, hit := range searchResults.Hits {
 		// Try to find the original log entry
 		if entry := lt.findLogEntryByID(hit.ID); entry != nil {
-			searchResultsEntries = append(searchResultsEntries, *entry)
+			// Create a copy with highlighting information
+			highlightedEntry := *entry
+			highlightedEntry.Highlights = make(map[string][]string)
+
+			// Extract highlighting information from Bleve
+			for field, fragments := range hit.Fragments {
+				highlightedEntry.Highlights[field] = fragments
+			}
+
+			searchResultsEntries = append(searchResultsEntries, highlightedEntry)
 		}
 	}
 
@@ -478,20 +508,110 @@ func (lt *LogsTab) performSearch(queryStr string) {
 	lt.updateStatus(status, "green")
 }
 
-// buildSearchQuery creates a Bleve query from the search string
+func (lt *LogsTab) renderHighlightedText(text, searchTerm string, highlights []string) string {
+	if searchTerm == "" && len(highlights) == 0 {
+		return text
+	}
+
+	if len(highlights) > 0 {
+		return lt.renderBleveHighlights(text, highlights)
+	}
+
+	if searchTerm != "" {
+		return lt.renderSimpleHighlight(text, searchTerm)
+	}
+
+	return text
+}
+
+func (lt *LogsTab) renderBleveHighlights(text string, highlights []string) string {
+	for _, fragment := range highlights {
+		if strings.Contains(fragment, "\x1b[") {
+			// Convert ANSI escape sequences to tview format
+			return lt.convertAnsiToTview(fragment)
+		}
+	}
+
+	result := text
+	for _, fragment := range highlights {
+		// Replace Bleve's <mark> tags with tview highlighting
+		highlighted := strings.ReplaceAll(fragment, "<mark>", "[#ffff00::b]")
+		highlighted = strings.ReplaceAll(highlighted, "</mark>", "[-]")
+		result = highlighted
+	}
+	return result
+}
+
+func (lt *LogsTab) renderSimpleHighlight(text, searchTerm string) string {
+	lowerText := strings.ToLower(text)
+	lowerSearch := strings.ToLower(searchTerm)
+
+	var result strings.Builder
+	start := 0
+
+	for {
+		index := strings.Index(lowerText[start:], lowerSearch)
+		if index == -1 {
+			result.WriteString(text[start:])
+			break
+		}
+
+		result.WriteString(text[start : start+index])
+
+		matchStart := start + index
+		matchEnd := matchStart + len(searchTerm)
+		result.WriteString(fmt.Sprintf("[#ffff00::b]%s[-]", text[matchStart:matchEnd]))
+
+		start = matchEnd
+	}
+
+	return result.String()
+}
+
+func (lt *LogsTab) convertAnsiToTview(text string) string {
+	ansiToTview := map[string]string{
+		"\x1b[31m":   "[red]",        // Red
+		"\x1b[33m":   "[yellow]",     // Yellow
+		"\x1b[33;1m": "[#ffff00::b]", // Bold Yellow (highlight)
+		"\x1b[43m":   "[#ffff00]",    // Yellow background
+		"\x1b[1m":    "[::b]",        // Bold
+		"\x1b[0m":    "[-]",          // Reset
+	}
+
+	result := text
+	for ansi, tview := range ansiToTview {
+		result = strings.ReplaceAll(result, ansi, tview)
+	}
+
+	result = strings.ReplaceAll(result, "\x1b[", "[")
+	result = strings.ReplaceAll(result, "m", "]")
+
+	return result
+}
+
+func (lt *LogsTab) enhanceSearchRequest(searchRequest *bleve.SearchRequest) {
+	if searchRequest.Highlight == nil {
+		searchRequest.Highlight = bleve.NewHighlight()
+	}
+
+	if len(searchRequest.Fields) == 0 {
+		searchRequest.Fields = []string{"*"}
+	}
+}
+
 func (lt *LogsTab) buildSearchQuery(queryStr string) blevequery.Query {
 	if strings.TrimSpace(queryStr) == "" {
 		return nil
 	}
 
-	// Simple query string query for complex searches
 	if strings.Contains(queryStr, " ") || strings.Contains(queryStr, "\"") || strings.Contains(queryStr, "*") {
-		return blevequery.NewQueryStringQuery(queryStr)
+		query := blevequery.NewQueryStringQuery(queryStr)
+		return query
 	}
 
-	// For single terms, create a match query that searches multiple fields
 	messageQuery := blevequery.NewMatchQuery(queryStr)
 	messageQuery.SetField("Message")
+	messageQuery.SetBoost(1.5) // Boost message field matches
 
 	levelQuery := blevequery.NewMatchQuery(queryStr)
 	levelQuery.SetField("Level")
@@ -499,14 +619,10 @@ func (lt *LogsTab) buildSearchQuery(queryStr string) blevequery.Query {
 	sourceQuery := blevequery.NewMatchQuery(queryStr)
 	sourceQuery.SetField("Source")
 
-	timestampQuery := blevequery.NewMatchQuery(queryStr)
-	timestampQuery.SetField("Timestamp")
-
 	return blevequery.NewDisjunctionQuery([]blevequery.Query{
 		messageQuery,
 		levelQuery,
 		sourceQuery,
-		timestampQuery,
 	})
 }
 
@@ -556,6 +672,7 @@ func (lt *LogsTab) updateLogDisplayFromFiltered() {
 	lt.logView.Clear()
 
 	var logText strings.Builder
+	filterText := strings.ToLower(strings.TrimSpace(lt.filterInput.GetText()))
 
 	for _, log := range lt.filteredLogs {
 		levelColor := "white"
@@ -571,8 +688,23 @@ func (lt *LogsTab) updateLogDisplayFromFiltered() {
 		}
 
 		timestamp := log.Timestamp.Format("15:04:05.000")
+
+		highlightedMessage := log.Message
+		if log.Highlights != nil && len(log.Highlights["Message"]) > 0 {
+			highlightedMessage = lt.renderHighlightedText(log.Message, "", log.Highlights["Message"])
+		} else if filterText != "" {
+			highlightedMessage = lt.renderHighlightedText(log.Message, filterText, nil)
+		}
+
+		highlightedLevel := strings.ToUpper(log.Level)
+		if log.Highlights != nil && len(log.Highlights["Level"]) > 0 {
+			highlightedLevel = lt.renderHighlightedText(highlightedLevel, "", log.Highlights["Level"])
+		} else if filterText != "" && strings.Contains(strings.ToLower(log.Level), filterText) {
+			highlightedLevel = lt.renderHighlightedText(highlightedLevel, filterText, nil)
+		}
+
 		logText.WriteString(fmt.Sprintf("[gray]%s[-] [%s]%-5s[-] %s\n",
-			timestamp, levelColor, strings.ToUpper(log.Level), log.Message))
+			timestamp, levelColor, highlightedLevel, highlightedMessage))
 
 		if len(log.Fields) > 0 {
 			var fieldKeys []string
@@ -582,7 +714,13 @@ func (lt *LogsTab) updateLogDisplayFromFiltered() {
 			sort.Strings(fieldKeys)
 
 			for _, key := range fieldKeys {
-				logText.WriteString(fmt.Sprintf("  [blue]%s:[-] %v\n", key, log.Fields[key]))
+				fieldValue := fmt.Sprintf("%v", log.Fields[key])
+				if log.Highlights != nil && len(log.Highlights[key]) > 0 {
+					fieldValue = lt.renderHighlightedText(fieldValue, "", log.Highlights[key])
+				} else if filterText != "" && strings.Contains(strings.ToLower(fieldValue), filterText) {
+					fieldValue = lt.renderHighlightedText(fieldValue, filterText, nil)
+				}
+				logText.WriteString(fmt.Sprintf("  [blue]%s:[-] %s\n", key, fieldValue))
 			}
 		}
 	}
@@ -599,20 +737,6 @@ func (lt *LogsTab) updateLogDisplayFromFiltered() {
 	}
 	title += ") "
 	lt.logView.SetTitle(title)
-}
-
-// clearSearchIndex clears the search index
-func (lt *LogsTab) clearSearchIndex() {
-	lt.searchIndexMu.Lock()
-	defer lt.searchIndexMu.Unlock()
-
-	if lt.searchIndex != nil {
-		lt.searchIndex.Close()
-		lt.searchIndex = nil
-	}
-
-	// Reinitialize
-	lt.initializeSearchIndex()
 }
 
 func (lt *LogsTab) addLogEntry(sourceName string, entry LogEntry) {
@@ -886,7 +1010,6 @@ func (lt *LogsTab) loadCloudWatchLogs(logGroupName string) {
 		logEntries = append(logEntries, entry)
 	}
 
-	// Sort by timestamp (newest first)
 	sort.Slice(logEntries, func(i, j int) bool {
 		return logEntries[i].Timestamp.After(logEntries[j].Timestamp)
 	})
@@ -894,7 +1017,6 @@ func (lt *LogsTab) loadCloudWatchLogs(logGroupName string) {
 	lt.logs["cloudwatch"] = logEntries
 	lt.mu.Unlock()
 
-	// Update display if cloudwatch is the selected source
 	lt.mu.RLock()
 	selectedSource := lt.selectedSource
 	lt.mu.RUnlock()
@@ -905,7 +1027,6 @@ func (lt *LogsTab) loadCloudWatchLogs(logGroupName string) {
 
 	lt.updateStatus(fmt.Sprintf("Loaded %d CloudWatch log entries from %d streams", len(logEntries), len(streams)), "green")
 
-	// Start tailing if not already active
 	lt.startTailing(logGroupName, streams)
 }
 
@@ -1027,7 +1148,9 @@ func (lt *LogsTab) ExportLogs(filename string) error {
 				log.Timestamp.Format("2006-01-02 15:04:05.000"),
 				strings.ToUpper(log.Level),
 				log.Message)
-			writer.WriteString(line)
+			if _, err := writer.WriteString(line); err != nil {
+				return fmt.Errorf("failed to write log line: %w", err)
+			}
 		}
 	}
 
