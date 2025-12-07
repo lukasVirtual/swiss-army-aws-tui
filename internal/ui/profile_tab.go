@@ -18,6 +18,7 @@ import (
 type ProfileTab struct {
 	// Core components
 	view           *tview.Flex
+	app            *tview.Application
 	profileManager *aws.ProfileManager
 	eventChan      chan<- Event
 
@@ -34,8 +35,9 @@ type ProfileTab struct {
 }
 
 // NewProfileTab creates a new profile tab
-func NewProfileTab(profileManager *aws.ProfileManager, eventChan chan<- Event) (*ProfileTab, error) {
+func NewProfileTab(app *tview.Application, profileManager *aws.ProfileManager, eventChan chan<- Event) (*ProfileTab, error) {
 	tab := &ProfileTab{
+		app:            app,
 		profileManager: profileManager,
 		eventChan:      eventChan,
 		profiles:       make(map[string]*aws.Profile),
@@ -303,18 +305,30 @@ func (pt *ProfileTab) testConnection() {
 
 		client, err := aws.NewClient(pt.selectedProfile.Name, pt.selectedRegion)
 		if err != nil {
-			pt.updateStatus("Connection failed", "red")
+			if pt.app != nil {
+				pt.app.QueueUpdateDraw(func() {
+					pt.updateStatus("Connection failed", "red")
+				})
+			}
 			logger.Error("Failed to create AWS client for connection test", zap.Error(err))
 			return
 		}
 		defer client.Close()
 
 		if err := client.TestConnection(ctx); err != nil {
-			pt.updateStatus("Connection failed", "red")
+			if pt.app != nil {
+				pt.app.QueueUpdateDraw(func() {
+					pt.updateStatus("Connection failed", "red")
+				})
+			}
 			logger.Error("Connection test failed", zap.Error(err))
 		} else {
 			accountID := client.GetAccountID()
-			pt.updateStatus(fmt.Sprintf("Connected to account: %s", accountID), "green")
+			if pt.app != nil {
+				pt.app.QueueUpdateDraw(func() {
+					pt.updateStatus(fmt.Sprintf("Connected to account: %s", accountID), "green")
+				})
+			}
 			logger.Info("Connection test successful", zap.String("account_id", accountID))
 		}
 	}()

@@ -24,6 +24,7 @@ import (
 
 type LogsTab struct {
 	view *tview.Flex
+	app  *tview.Application
 
 	logSourceList *tview.List
 	logView       *tview.TextView
@@ -75,8 +76,9 @@ var logSources = []LogSource{
 	{Name: "kubectl", DisplayName: "Kubernetes Logs", Type: "command", Path: "kubectl logs", Enabled: false},
 }
 
-func NewLogsTab() (*LogsTab, error) {
+func NewLogsTab(app *tview.Application) (*LogsTab, error) {
 	tab := &LogsTab{
+		app:        app,
 		logs:       make(map[string][]LogEntry),
 		autoScroll: true,
 		maxLines:   1000,
@@ -131,6 +133,23 @@ func (lt *LogsTab) initializeUI() error {
 		SetLabel("Filter: ").
 		SetFieldWidth(0).
 		SetChangedFunc(lt.onFilterChanged)
+
+	lt.filterInput.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			if lt.app != nil {
+				lt.app.SetFocus(lt.logSourceList)
+			}
+			lt.filterInput.SetBorder(true).SetTitle(" Filter Logs ").SetTitleAlign(tview.AlignLeft)
+			return nil
+		case tcell.KeyEnter:
+			if lt.app != nil {
+				lt.app.SetFocus(lt.logSourceList)
+			}
+			return nil
+		}
+		return event
+	})
 
 	lt.filterInput.SetBorder(true).SetTitle(" Filter Logs ").SetTitleAlign(tview.AlignLeft)
 
@@ -836,7 +855,10 @@ func (lt *LogsTab) toggleAutoScroll() {
 }
 
 func (lt *LogsTab) focusFilter() {
-
+	if lt.filterInput != nil && lt.app != nil {
+		lt.app.SetFocus(lt.filterInput)
+		lt.filterInput.SetBorder(true).SetTitle(" Filter Logs (Active) ").SetTitleAlign(tview.AlignLeft)
+	}
 }
 
 func (lt *LogsTab) updateStatus(message, color string) {
@@ -964,16 +986,23 @@ func (lt *LogsTab) loadCloudWatchLogs(logGroupName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Get log streams
 	streams, err := cloudWatchService.DescribeLogStreams(ctx, logGroupName, 10)
 	if err != nil {
 		logger.Error("Failed to describe log streams", zap.String("logGroup", logGroupName), zap.Error(err))
-		lt.updateStatus(fmt.Sprintf("Failed to get log streams: %s", err.Error()), "red")
+		if lt.app != nil {
+			lt.app.QueueUpdateDraw(func() {
+				lt.updateStatus(fmt.Sprintf("Failed to get log streams: %s", err.Error()), "red")
+			})
+		}
 		return
 	}
 
 	if len(streams) == 0 {
-		lt.updateStatus(fmt.Sprintf("No log streams found in %s", logGroupName), "yellow")
+		if lt.app != nil {
+			lt.app.QueueUpdateDraw(func() {
+				lt.updateStatus(fmt.Sprintf("No log streams found in %s", logGroupName), "yellow")
+			})
+		}
 		return
 	}
 
@@ -1022,10 +1051,18 @@ func (lt *LogsTab) loadCloudWatchLogs(logGroupName string) {
 	lt.mu.RUnlock()
 
 	if selectedSource == "cloudwatch" {
-		lt.updateLogDisplay(logEntries)
+		if lt.app != nil {
+			lt.app.QueueUpdateDraw(func() {
+				lt.updateLogDisplay(logEntries)
+			})
+		}
 	}
 
-	lt.updateStatus(fmt.Sprintf("Loaded %d CloudWatch log entries from %d streams", len(logEntries), len(streams)), "green")
+	if lt.app != nil {
+		lt.app.QueueUpdateDraw(func() {
+			lt.updateStatus(fmt.Sprintf("Loaded %d CloudWatch log entries from %d streams", len(logEntries), len(streams)), "green")
+		})
+	}
 
 	lt.startTailing(logGroupName, streams)
 }
@@ -1079,7 +1116,11 @@ func (lt *LogsTab) startTailing(logGroupName string, streams []clients.LogStream
 				lt.addCloudWatchEvent(event)
 			case err := <-errorChan:
 				logger.Error("CloudWatch tailing error", zap.Error(err))
-				lt.updateStatus(fmt.Sprintf("Tailing error: %s", err.Error()), "red")
+				if lt.app != nil {
+					lt.app.QueueUpdateDraw(func() {
+						lt.updateStatus(fmt.Sprintf("Tailing error: %s", err.Error()), "red")
+					})
+				}
 			}
 		}
 	}()
@@ -1104,7 +1145,13 @@ func (lt *LogsTab) addCloudWatchEvent(event clients.LogEvent) {
 		entry.Fields["ingestionTime"] = time.UnixMilli(event.IngestionTime).Format("2006-01-02 15:04:05")
 	}
 
-	lt.addLogEntry("cloudwatch", entry)
+	if lt.app != nil {
+		lt.app.QueueUpdateDraw(func() {
+			lt.addLogEntry("cloudwatch", entry)
+		})
+	} else {
+		lt.addLogEntry("cloudwatch", entry)
+	}
 }
 
 // stopTailing stops the active tailing process

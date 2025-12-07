@@ -82,7 +82,6 @@ func (c *Client) initializeClients() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Initialize raw AWS SDK clients
 	ec2Client := ec2.NewFromConfig(c.config)
 	s3Client := s3.NewFromConfig(c.config)
 	rdsClient := rds.NewFromConfig(c.config)
@@ -90,7 +89,6 @@ func (c *Client) initializeClients() error {
 	stsClient := sts.NewFromConfig(c.config)
 	cloudWatchLogsClient := cloudwatchlogs.NewFromConfig(c.config)
 
-	// Initialize service wrappers
 	ec2Svc, _ := clients.NewEC2Service(ec2Client)
 	s3Svc, _ := clients.NewS3Service(s3Client)
 	rdsSvc, _ := clients.NewRDSService(rdsClient)

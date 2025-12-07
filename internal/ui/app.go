@@ -104,17 +104,17 @@ func (app *App) initializeUI() error {
 	app.pages = tview.NewPages()
 
 	// Initialize tabs
-	app.profileTab, err = NewProfileTab(app.profileManager, app.eventChan)
+	app.profileTab, err = NewProfileTab(app.app, app.profileManager, app.eventChan)
 	if err != nil {
 		return fmt.Errorf("failed to create profile tab: %w", err)
 	}
 
-	app.resourcesTab, err = NewResourcesTab(app.eventChan)
+	app.resourcesTab, err = NewResourcesTab(app.app, app.eventChan)
 	if err != nil {
 		return fmt.Errorf("failed to create resources tab: %w", err)
 	}
 
-	app.logsTab, err = NewLogsTab()
+	app.logsTab, err = NewLogsTab(app.app)
 	if err != nil {
 		return fmt.Errorf("failed to create logs tab: %w", err)
 	}

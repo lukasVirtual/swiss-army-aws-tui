@@ -22,6 +22,7 @@ import (
 type ResourcesTab struct {
 	// Core components
 	view      *tview.Flex
+	app       *tview.Application
 	awsClient *aws.Client
 	eventChan chan<- Event
 
@@ -74,8 +75,9 @@ var supportedServices = []ServiceInfo{
 }
 
 // NewResourcesTab creates a new resources tab
-func NewResourcesTab(eventChan chan<- Event) (*ResourcesTab, error) {
+func NewResourcesTab(app *tview.Application, eventChan chan<- Event) (*ResourcesTab, error) {
 	tab := &ResourcesTab{
+		app:       app,
 		eventChan: eventChan,
 		resources: make(map[string][]Resource),
 	}
@@ -287,7 +289,11 @@ func (rt *ResourcesTab) loadResourcesAsync(serviceName string) {
 
 	if err != nil {
 		logger.Error("Failed to load resources", zap.String("service", serviceName), zap.Error(err))
-		rt.updateStatus(fmt.Sprintf("Error loading %s: %s", serviceName, err.Error()), "red")
+		if rt.app != nil {
+			rt.app.QueueUpdateDraw(func() {
+				rt.updateStatus(fmt.Sprintf("Error loading %s: %s", serviceName, err.Error()), "red")
+			})
+		}
 		return
 	}
 
@@ -295,8 +301,12 @@ func (rt *ResourcesTab) loadResourcesAsync(serviceName string) {
 	rt.resources[serviceName] = resources
 	rt.mu.Unlock()
 
-	rt.updateResourceTable(resources)
-	rt.updateStatus(fmt.Sprintf("Loaded %d %s resources", len(resources), serviceName), "green")
+	if rt.app != nil {
+		rt.app.QueueUpdateDraw(func() {
+			rt.updateResourceTable(resources)
+			rt.updateStatus(fmt.Sprintf("Loaded %d %s resources", len(resources), serviceName), "green")
+		})
+	}
 
 	logger.Info("Loaded resources", zap.String("service", serviceName), zap.Int("count", len(resources)))
 }
