@@ -174,7 +174,7 @@ func (app *App) updateTabDisplay() {
 // createMainLayout creates the main application layout
 func (app *App) createMainLayout() {
 	// Create header with app title and status
-	header := app.createHeader()
+	// header := app.createHeader()
 
 	// Create main content area
 	content := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -184,30 +184,38 @@ func (app *App) createMainLayout() {
 	// Create footer with shortcuts
 	footer := app.createFooter()
 
-	// Main layout
+	// Main layout with margin
 	main := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(header, 3, 0, false).
-		AddItem(content, 0, 1, true).
-		AddItem(footer, 3, 0, false)
+		AddItem(nil, 1, 0, false). // Top margin
+		AddItem(tview.NewFlex().SetDirection(tview.FlexColumn).
+			AddItem(nil, 2, 0, false). // Left margin
+			AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
+							// AddItem(header, 3, 0, false).
+							AddItem(content, 0, 1, true).
+							AddItem(footer, 3, 0, false), 0, 1, true).
+			AddItem(nil, 2, 0, false), // Right margin
+						0, 1, true).
+		AddItem(nil, 1, 0, false) // Bottom margin
 
 	app.app.SetRoot(main, true)
 }
 
 // createHeader creates the application header
-func (app *App) createHeader() *tview.TextView {
-	header := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter)
+// TODO: Maybe this is needed later but for now i want to save some space
+// func (app *App) createHeader() *tview.TextView {
+// 	header := tview.NewTextView().
+// 		SetDynamicColors(true).
+// 		SetTextAlign(tview.AlignCenter)
 
-	headerText := fmt.Sprintf(`[green:black:b]%s[-:-:-] [white:black]v%s[-:-:-]
-[yellow:black]%s[-:-:-]`,
-		app.config.App.Name,
-		app.config.App.Version,
-		app.config.App.Description)
+// 	headerText := fmt.Sprintf(`[green:black:b]%s[-:-:-] [white:black]v%s[-:-:-]
+// [yellow:black]%s[-:-:-]`,
+// 		app.config.App.Name,
+// 		app.config.App.Version,
+// 		app.config.App.Description)
 
-	header.SetText(headerText).SetBorder(true)
-	return header
-}
+// 	header.SetText(headerText).SetBorder(true)
+// 	return header
+// }
 
 // createFooter creates the application footer with shortcuts
 func (app *App) createFooter() *tview.TextView {
@@ -215,7 +223,7 @@ func (app *App) createFooter() *tview.TextView {
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter)
 
-	footerText := `[yellow:black]Tab[-:-:-]: Switch tabs | [yellow:black]Ctrl+R[-:-:-]: Refresh | [yellow:black]Ctrl+C[-:-:-]: Quit | [yellow:black]?[-:-:-]: Help`
+	footerText := fmt.Sprintf(`[yellow:black]Tab[-:-:-]: Switch tabs | [yellow:black]Ctrl+R[-:-:-]: Refresh | [yellow:black]Ctrl+C[-:-:-]: Quit | [yellow:black]?[-:-:-]: Help | [yellow:black]v%s[-:-:-]`, app.config.App.Version)
 
 	footer.SetText(footerText).SetBorder(true)
 	return footer
@@ -235,6 +243,9 @@ func (app *App) setupKeyBindings() {
 			app.refresh()
 			return nil
 		case tcell.KeyCtrlC:
+			app.Quit()
+			return nil
+		case tcell.KeyEscape:
 			app.Quit()
 			return nil
 		case tcell.KeyF1:

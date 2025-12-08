@@ -1096,7 +1096,6 @@ func (lt *LogsTab) startTailing(logGroupName string, streams []clients.LogStream
 			return
 		}
 
-		// Extract stream names
 		var streamNames []string
 		for _, stream := range streams {
 			streamNames = append(streamNames, stream.LogStreamName)
@@ -1105,7 +1104,6 @@ func (lt *LogsTab) startTailing(logGroupName string, streams []clients.LogStream
 		eventsChan := make(chan clients.LogEvent, 100)
 		errorChan := make(chan error, 10)
 
-		// Start tailing
 		go cloudWatchService.TailLogStreams(lt.cloudWatchCtx, logGroupName, streamNames, eventsChan, errorChan)
 
 		for {
