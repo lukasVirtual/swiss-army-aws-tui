@@ -20,7 +20,7 @@ Swiss Army TUI is a terminal UI for DevOps workflows on AWS. It provides a tabbe
 - **EC2**: instance listing, status, and basic details
 - **S3**: bucket listing and basic inspection
 - **RDS**: planned
-- **Lambda**: planned
+- **Lambda**: View lambdas and details of it + when pressing "l" on a selected lambda function you can inspect the logs of that lambda function
 - **ECS**: planned
 - **VPC**: planned
 
