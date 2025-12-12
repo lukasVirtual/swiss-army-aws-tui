@@ -1,39 +1,39 @@
 # Swiss Army TUI
 
-A comprehensive Terminal User Interface (TUI) application designed for DevOps engineers. Swiss Army TUI provides a beautiful, tabbed interface to manage and monitor AWS resources, view logs, and configure settings.
+Swiss Army TUI is a terminal UI for DevOps workflows on AWS. It provides a tabbed interface for switching between profiles/regions, inspecting resources, and viewing logs—without leaving the terminal.
 
 ## Features
 
-### 🚀 Core Capabilities
-- **Multi-tab Interface**: Intuitive tabbed navigation for different functionalities
-- **AWS Profile Management**: Easy switching between AWS profiles and regions
-- **Resource Monitoring**: Real-time monitoring of AWS resources
-- **Log Viewing**: Integrated log viewer with filtering capabilities
-- **Configuration Management**: Comprehensive settings management
+### Core
+- Tabbed navigation across features
+- AWS profile and region switching
+- Resource views with auto-refresh
+- Built-in log viewer with filtering
+- Configuration via file and flags
 
-### 🔧 AWS Services Support
-- **EC2**: Monitor instances, their states, and configurations
-- **S3**: List and manage S3 buckets
-- **RDS**: Database instance monitoring (coming soon)
-- **Lambda**: Function management (coming soon)
-- **ECS**: Container service monitoring (coming soon)
-- **VPC**: Network resource viewing (coming soon)
+### AWS service coverage
+- **EC2**: instance listing, status, and basic details
+- **S3**: bucket listing and basic inspection
+- **RDS**: planned
+- **Lambda**: planned
+- **ECS**: planned
+- **VPC**: planned
 
-### 🎨 User Experience
-- **Beautiful UI**: Modern terminal interface with colors and themes
-- **Mouse Support**: Full mouse interaction support
-- **Keyboard Shortcuts**: Efficient keyboard navigation
-- **Real-time Updates**: Auto-refreshing data with configurable intervals
-- **Filtering**: Powerful filtering capabilities across all views
+### UX
+- Theme support (dark/light)
+- Mouse support (optional)
+- Keyboard shortcuts for common actions
+- Configurable refresh interval
+- Filtering in list views
+
+## Requirements
+- Go 1.21+
+- AWS CLI configured (recommended)
+- A terminal with true color support (recommended)
 
 ## Installation
 
-### Prerequisites
-- Go 1.21 or later
-- AWS CLI configured with profiles (optional but recommended)
-- Terminal with true color support (recommended)
-
-### From Source
+### Build from source
 ```bash
 git clone https://github.com/yourusername/swiss-army-tui.git
 cd swiss-army-tui
@@ -41,38 +41,39 @@ go build -o swiss-army-tui .
 sudo mv swiss-army-tui /usr/local/bin/
 ```
 
-### Using Go Install
+### Install with Go
 ```bash
 go install github.com/yourusername/swiss-army-tui@latest
 ```
 
-## Quick Start
+## Quick start
 
-1. **First Run**: The application will create default configuration files
+Run the application (it will create a default config on first launch):
 ```bash
 swiss-army-tui
 ```
 
-2. **Configure AWS**: Ensure you have AWS profiles configured
+Configure an AWS profile if needed:
 ```bash
 aws configure --profile myprofile
 ```
 
-3. **Launch**: Start the application and select your AWS profile
+Launch with an explicit profile/region:
 ```bash
 swiss-army-tui --aws-profile myprofile --aws-region us-east-1
 ```
 
 ## Configuration
 
-Swiss Army TUI uses a YAML configuration file located at `~/.swiss-army-tui/config.yaml`.
+Config file location:
+- `~/.swiss-army-tui/config.yaml`
 
-### Example Configuration
+Example:
 ```yaml
 app:
   name: "Swiss Army TUI"
   version: "1.0.0"
-  description: "DevOps Swiss Army Knife TUI"
+  description: "DevOps AWS TUI"
   debug: false
 
 aws:
@@ -97,165 +98,119 @@ logger:
 ## Usage
 
 ### Navigation
-- **Tab / Shift+Tab**: Switch between tabs
-- **1, 2, 3, 4**: Jump directly to specific tabs
-- **Ctrl+R**: Refresh current tab
-- **Ctrl+C**: Quit application
-- **F1 / ?**: Show help
+- `Tab` / `Shift+Tab`: switch tabs
+- `1..4`: jump to a tab
+- `Ctrl+R`: refresh current view
+- `Ctrl+C`: quit
+- `F1` / `?`: help
 
-### Profile Tab
-- **Enter**: Select AWS profile
-- **Space**: Test connection
-- **r**: Refresh profiles
+### Profile tab
+- `Enter`: select profile
+- `Space`: test connection
+- `r`: reload profiles
 
-### Resources Tab
-- **Enter**: View resource details
-- **r**: Refresh resources
-- **f**: Focus filter input
+### Resources tab
+- `Enter`: view details
+- `r`: refresh
+- `f`: focus filter
 
-### Logs Tab
-- **r**: Refresh logs
-- **c**: Clear logs
-- **s**: Toggle auto-scroll
-- **g**: Go to beginning
-- **G**: Go to end
+### Logs tab
+- `r`: refresh
+- `c`: clear
+- `s`: toggle auto-scroll
+- `g`: jump to start
+- `G`: jump to end
 
-## Command Line Options
-
+## CLI options
 ```bash
 swiss-army-tui [flags]
 
 Flags:
   --aws-profile string    AWS profile to use
   --aws-region string     AWS region to use
-  --config string         config file (default is $HOME/.swiss-army-tui/config.yaml)
+  --config string         config file (default: $HOME/.swiss-army-tui/config.yaml)
   --dev                   enable development mode
-  -h, --help              help for swiss-army-tui
+  -h, --help              help
   --log-level string      log level (debug, info, warn, error) (default "info")
   -v, --verbose           verbose output
 ```
 
-## Architecture
-
-Swiss Army TUI follows modern Go practices with a clean architecture:
-
-```
+## Project layout
+```text
 swiss-army-tui/
-├── cmd/                 # Command line interface
+├── cmd/                  # CLI entrypoints
 ├── internal/
-│   ├── aws/            # AWS service integrations
-│   ├── config/         # Configuration management
-│   └── ui/             # User interface components
+│   ├── aws/              # AWS integrations (SDK clients, service wrappers)
+│   ├── config/           # Config loading and validation
+│   └── ui/               # TUI views/components
 ├── pkg/
-│   └── logger/         # Structured logging
-└── main.go             # Application entry point
+│   └── logger/           # Logging utilities
+└── main.go               # Main entry
 ```
 
-### Key Components
-
-- **AWS Client**: Manages AWS SDK connections and service interactions
-- **Profile Manager**: Handles AWS profile loading and validation
-- **UI Framework**: Built with [tview](https://github.com/rivo/tview) for rich terminal interfaces
-- **Configuration**: Uses [Viper](https://github.com/spf13/viper) for flexible configuration management
-- **Logging**: Structured logging with [Zap](https://github.com/uber-go/zap)
+### Notes on implementation
+- UI is built with `tview`
+- Configuration uses `viper`
+- CLI uses `cobra`
+- Logging uses `zap`
+- AWS calls use AWS SDK for Go v2
 
 ## Development
 
-### Building from Source
+Build:
 ```bash
-git clone https://github.com/yourusername/swiss-army-tui.git
-cd swiss-army-tui
 go mod download
 go build -v .
 ```
 
-### Running Tests
+Test:
 ```bash
 go test ./...
 ```
 
-### Development Mode
+Run in dev mode:
 ```bash
 go run . --dev --verbose
 ```
 
-### Project Structure
-The project follows Go best practices:
-- `internal/`: Private application code
-- `pkg/`: Public library code
-- `cmd/`: Command line interface
-- Clean architecture with clear separation of concerns
-
-## Contributing
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-### Development Guidelines
-- Follow Go best practices and idioms
-- Add tests for new functionality
-- Update documentation as needed
-- Use conventional commit messages
-
 ## Roadmap
 
-### Near Term
-- [ ] Complete RDS integration
-- [ ] Add Lambda function management
-- [ ] Implement ECS service monitoring
-- [ ] Add VPC network visualization
-- [ ] CloudWatch integration
-- [ ] Export functionality
+### Near-term
+- RDS integration
+- Lambda management
+- ECS service monitoring
+- VPC views
+- CloudWatch integration
+- Export/share functionality (e.g., JSON/CSV)
 
-### Long Term
-- [ ] Kubernetes integration
-- [ ] Docker container management
-- [ ] CI/CD pipeline integration
-- [ ] Infrastructure as Code support
-- [ ] Multi-cloud support (Azure, GCP)
-- [ ] Plugin system
+### Longer-term
+- Kubernetes integration
+- Docker tooling
+- CI/CD integrations
+- IaC helpers (Terraform/CloudFormation)
+- Multi-cloud support
+- Plugin system
 
 ## FAQ
 
-### Q: How do I add a new AWS profile?
-A: Use the AWS CLI to configure profiles, then restart Swiss Army TUI. The new profiles will be automatically detected.
+**How do I add a new AWS profile?**  
+Add it via AWS CLI (`aws configure --profile ...`) and restart Swiss Army TUI.
 
-### Q: Why can't I see my resources?
-A: Ensure your AWS profile has the necessary permissions for the services you want to monitor.
+**Why don’t I see any resources?**  
+Confirm the selected profile/region and ensure the IAM permissions allow the relevant `Describe/List` APIs.
 
-### Q: Can I use this with AWS SSO?
-A: Yes, configure your AWS profiles with SSO as you normally would, and Swiss Army TUI will use those credentials.
+**Does it work with AWS SSO?**  
+Yes—if your AWS CLI profile is configured for SSO, the application will use the same credential flow.
 
-### Q: How do I change the refresh interval?
-A: Go to the Settings tab and modify the "Refresh Interval" setting, or edit the configuration file directly.
+**How do I change refresh interval?**  
+Update `ui.refresh_interval` in the config file or via the Settings tab (if enabled).
 
 ## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT. See `LICENSE`.
 
 ## Acknowledgments
-
-- [tview](https://github.com/rivo/tview) - Amazing TUI framework
-- [AWS SDK for Go v2](https://github.com/aws/aws-sdk-go-v2) - AWS service integration
-- [Cobra](https://github.com/spf13/cobra) - CLI framework
-- [Viper](https://github.com/spf13/viper) - Configuration management
-- [Zap](https://github.com/uber-go/zap) - Structured logging
-
-## Support
-
-If you encounter any issues or have questions:
-1. Check the [FAQ](#faq) section
-2. Search existing [Issues](https://github.com/yourusername/swiss-army-tui/issues)
-3. Create a new issue with detailed information
-
----
-
-**Made with ❤️ for the DevOps community**
-# swiss-army-aws-tui
-# swiss-army-aws-tui
-# swiss-army-aws-tui
-# swiss-army-aws-tui
-# swiss-army-aws-tui
+- `tview` (TUI framework)
+- AWS SDK for Go v2
+- `cobra` (CLI)
+- `viper` (config)
+- `zap` (logging)
