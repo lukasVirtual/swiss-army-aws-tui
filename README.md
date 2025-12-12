@@ -2,6 +2,11 @@
 
 Swiss Army TUI is a terminal UI for DevOps workflows on AWS. It provides a tabbed interface for switching between profiles/regions, inspecting resources, and viewing logs—without leaving the terminal.
 
+
+<img width="2981" height="1581" alt="Bildschirmfoto 2025-12-12 um 22 02 15" src="https://github.com/user-attachments/assets/487339d9-6e26-4e82-b80e-bb60493d5f97" />
+<img width="2980" height="1576" alt="Bildschirmfoto 2025-12-12 um 22 02 45" src="https://github.com/user-attachments/assets/33b2bd23-e936-43cd-acb1-cbc7398c4787" />
+<img width="2989" height="1585" alt="Bildschirmfoto 2025-12-12 um 22 03 03" src="https://github.com/user-attachments/assets/bee15571-a841-4d25-8ba5-315f79cb1ea6" />
+
 ## Features
 
 ### Core
