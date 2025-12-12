@@ -20,6 +20,13 @@ type Profile struct {
 	Source        string `json:"source,omitempty"` // "config" or "credentials"
 	RoleARN       string `json:"role_arn,omitempty"`
 	SourceProfile string `json:"source_profile,omitempty"`
+	// SSO specific fields
+	SSOStartURL    string `json:"sso_start_url,omitempty"`
+	SSORegion      string `json:"sso_region,omitempty"`
+	SSOAccountID   string `json:"sso_account_id,omitempty"`
+	SSORoleName    string `json:"sso_role_name,omitempty"`
+	SSOSessionName string `json:"sso_session_name,omitempty"`
+	IsSSOProfile   bool   `json:"is_sso_profile,omitempty"`
 }
 
 // ProfileManager manages AWS profiles
@@ -163,6 +170,22 @@ func (pm *ProfileManager) loadFromConfigFile() error {
 					currentProfile.RoleARN = value
 				case "source_profile":
 					currentProfile.SourceProfile = value
+				// SSO specific fields
+				case "sso_start_url":
+					currentProfile.SSOStartURL = value
+					currentProfile.IsSSOProfile = true
+				case "sso_region":
+					currentProfile.SSORegion = value
+					currentProfile.IsSSOProfile = true
+				case "sso_account_id":
+					currentProfile.SSOAccountID = value
+					currentProfile.IsSSOProfile = true
+				case "sso_role_name":
+					currentProfile.SSORoleName = value
+					currentProfile.IsSSOProfile = true
+				case "sso_session":
+					currentProfile.SSOSessionName = value
+					currentProfile.IsSSOProfile = true
 				}
 			}
 		}
@@ -269,6 +292,20 @@ func GetDefaultCredentialsPath() string {
 	return filepath.Join(homeDir, ".aws", "credentials")
 }
 
+// IsSSOProfile checks if a profile is configured for SSO
+func (p *Profile) IsSSOProfileConfigured() bool {
+	return p.SSOStartURL != "" && p.SSORegion != ""
+}
+
+// GetSSOErrorMessage returns a helpful error message for SSO profiles
+func (p *Profile) GetSSOErrorMessage() string {
+	if !p.IsSSOProfileConfigured() {
+		return ""
+	}
+
+	return fmt.Sprintf("Profile '%s' is configured for AWS SSO. Please run 'aws sso login --profile %s' to authenticate and try again.", p.Name, p.Name)
+}
+
 // CreateAWSConfigIfNotExists creates basic AWS config structure if it doesn't exist
 func CreateAWSConfigIfNotExists() error {
 	homeDir, err := os.UserHomeDir()
@@ -287,6 +324,15 @@ func CreateAWSConfigIfNotExists() error {
 		defaultConfig := `[default]
 region = us-east-1
 output = json
+
+# Example SSO profile configuration
+# [profile my-sso-profile]
+# sso_start_url = https://my-sso-portal.awsapps.com/start
+# sso_region = us-east-1
+# sso_account_id = 123456789012
+# sso_role_name = MyRole
+# region = us-west-2
+# output = json
 `
 		if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
 			return fmt.Errorf("failed to create default config file: %w", err)

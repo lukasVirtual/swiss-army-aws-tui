@@ -3,6 +3,8 @@ package aws
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,12 +50,45 @@ func NewClient(profile, region string) (*Client, error) {
 		zap.String("profile", profile),
 		zap.String("region", region))
 
-	cfg, err := config.LoadDefaultConfig(ctx,
+	// Check if this is an SSO profile
+	profileManager := NewProfileManager(
+		GetDefaultConfigPath(),
+		GetDefaultCredentialsPath(),
+	)
+
+	if err := profileManager.LoadProfiles(); err != nil {
+		logger.Warn("Failed to load profiles for SSO detection", zap.Error(err))
+	}
+
+	// Create a custom options slice to handle SSO profiles
+	var options []func(*config.LoadOptions) error
+
+	// Add profile and region configuration
+	options = append(options,
 		config.WithSharedConfigProfile(profile),
 		config.WithRegion(region),
 	)
+
+	// Enable SSO support by setting the appropriate environment variables if they exist
+	if ssoSessionName := os.Getenv("AWS_SSO_SESSION_NAME"); ssoSessionName != "" {
+		configFiles := []string{
+			os.Getenv("AWS_CONFIG_FILE"),
+			os.Getenv("AWS_SHARED_CREDENTIALS_FILE"),
+		}
+		options = append(options, config.WithSharedConfigFiles(configFiles))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, options...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load AWS config for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
+		// Check if this is an SSO profile and provide a specific error message
+		if profile, exists := profileManager.GetProfile(profile); exists && profile.IsSSOProfileConfigured() {
+			return nil, fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile.Name, profile.Name, err)
+		}
+		// Check if this is an SSO-related error
+		if isSSOError(err) {
+			return nil, fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
+		}
+		return nil, fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
 	}
 
 	client := &Client{
@@ -67,7 +102,11 @@ func NewClient(profile, region string) (*Client, error) {
 	}
 
 	if err := client.loadCallerIdentity(ctx); err != nil {
-		return nil, fmt.Errorf("failed to get caller identity for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
+		// Check if this is an SSO-related error
+		if isSSOError(err) {
+			return nil, fmt.Errorf("failed to get caller identity for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
+		}
+		return nil, fmt.Errorf("failed to get caller identity for profile %s: %w", profile, err)
 	}
 
 	logger.Info("AWS client created successfully",
@@ -220,12 +259,45 @@ func (c *Client) SwitchProfile(profile, region string) error {
 		zap.String("to_profile", profile),
 		zap.String("region", region))
 
-	cfg, err := config.LoadDefaultConfig(ctx,
+	// Check if this is an SSO profile
+	profileManager := NewProfileManager(
+		GetDefaultConfigPath(),
+		GetDefaultCredentialsPath(),
+	)
+
+	if err := profileManager.LoadProfiles(); err != nil {
+		logger.Warn("Failed to load profiles for SSO detection", zap.Error(err))
+	}
+
+	// Create a custom options slice to handle SSO profiles
+	var options []func(*config.LoadOptions) error
+
+	// Add profile and region configuration
+	options = append(options,
 		config.WithSharedConfigProfile(profile),
 		config.WithRegion(region),
 	)
+
+	// Enable SSO support by setting the appropriate environment variables if they exist
+	if ssoSessionName := os.Getenv("AWS_SSO_SESSION_NAME"); ssoSessionName != "" {
+		configFiles := []string{
+			os.Getenv("AWS_CONFIG_FILE"),
+			os.Getenv("AWS_SHARED_CREDENTIALS_FILE"),
+		}
+		options = append(options, config.WithSharedConfigFiles(configFiles))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, options...)
 	if err != nil {
-		return fmt.Errorf("failed to load AWS config for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
+		// Check if this is an SSO profile and provide a specific error message
+		if profile, exists := profileManager.GetProfile(profile); exists && profile.IsSSOProfileConfigured() {
+			return fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile.Name, profile.Name, err)
+		}
+		// Check if this is an SSO-related error
+		if isSSOError(err) {
+			return fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
+		}
+		return fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
 	}
 
 	c.mu.Lock()
@@ -239,7 +311,11 @@ func (c *Client) SwitchProfile(profile, region string) error {
 	}
 
 	if err := c.loadCallerIdentity(ctx); err != nil {
-		return fmt.Errorf("failed to get caller identity for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", profile, profile, err)
+		// Check if this is an SSO-related error
+		if isSSOError(err) {
+			return fmt.Errorf("failed to get caller identity for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
+		}
+		return fmt.Errorf("failed to get caller identity for profile %s: %w", profile, err)
 	}
 
 	logger.Info("AWS profile switched successfully",
@@ -260,7 +336,11 @@ func (c *Client) TestConnection(ctx context.Context) error {
 
 	_, err := c.clients.STS.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		return fmt.Errorf("AWS connection test failed for profile %s. If you are using an AWS SSO profile, run 'aws sso login --profile %s' and try again: %w", c.GetProfile(), c.GetProfile(), err)
+		// Check if this is an SSO-related error
+		if isSSOError(err) {
+			return fmt.Errorf("AWS connection test failed for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", c.GetProfile(), c.GetProfile(), err)
+		}
+		return fmt.Errorf("AWS connection test failed for profile %s: %w", c.GetProfile(), err)
 	}
 
 	return nil
@@ -275,4 +355,32 @@ func (c *Client) Close() error {
 
 	logger.Debug("AWS client closed", zap.String("profile", c.profile))
 	return nil
+}
+
+// isSSOError checks if the error is related to AWS SSO authentication
+func isSSOError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	errStr := err.Error()
+	ssoIndicators := []string{
+		"SSO",
+		"sso",
+		"token",
+		"expired",
+		"login",
+		"authenticate",
+		"not authorized",
+		"access denied",
+		"credentials",
+	}
+
+	for _, indicator := range ssoIndicators {
+		if strings.Contains(errStr, indicator) {
+			return true
+		}
+	}
+
+	return false
 }
