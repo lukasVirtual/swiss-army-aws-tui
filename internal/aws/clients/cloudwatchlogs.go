@@ -271,3 +271,16 @@ func (s *CloudWatchLogsService) TailLogStreams(ctx context.Context, logGroupName
 		}
 	}
 }
+
+func (s *CloudWatchLogsService) ListAllLogGroups(ctx context.Context) ([]types.LogGroupSummary, error) {
+	if s == nil || s.client == nil {
+		return nil, fmt.Errorf("CloudWatch Logs service not initialized")
+	}
+
+	input := &cloudwatchlogs.ListLogGroupsInput{}
+	result, err := s.client.ListLogGroups(ctx, input)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list log groups: %w", err)
+	}
+	return result.LogGroups, nil
+}
