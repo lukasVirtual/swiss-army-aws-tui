@@ -77,7 +77,7 @@ func (s *RDSService) GetRDSDetail(ctx context.Context) ([]RDSDetails, error) {
 // NewRDSService creates a new RDSService instance
 func NewRDSService(client *rds.Client) (*RDSService, error) {
 	if client == nil {
-		return nil, fmt.Errorf("RDS client cannot be nil")
+		return nil, fmt.Errorf("RDS client not provided")
 	}
 
 	return &RDSService{

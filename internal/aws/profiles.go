@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"swiss-army-tui/pkg/logger"
 
@@ -85,6 +86,7 @@ func (pm *ProfileManager) GetProfileNames() []string {
 	for name := range pm.profiles {
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 

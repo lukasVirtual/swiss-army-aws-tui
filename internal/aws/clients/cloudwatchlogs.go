@@ -34,7 +34,7 @@ type LogEvent struct {
 // NewCloudWatchLogsService creates a new CloudWatch Logs service wrapper
 func NewCloudWatchLogsService(client *cloudwatchlogs.Client) (*CloudWatchLogsService, error) {
 	if client == nil {
-		return nil, fmt.Errorf("cloudwatchlogs client is nil")
+		return nil, fmt.Errorf("CloudWatch Logs client not provided")
 	}
 
 	return &CloudWatchLogsService{

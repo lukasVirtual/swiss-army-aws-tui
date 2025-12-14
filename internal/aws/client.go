@@ -50,45 +50,9 @@ func NewClient(profile, region string) (*Client, error) {
 		zap.String("profile", profile),
 		zap.String("region", region))
 
-	// Check if this is an SSO profile
-	profileManager := NewProfileManager(
-		GetDefaultConfigPath(),
-		GetDefaultCredentialsPath(),
-	)
-
-	if err := profileManager.LoadProfiles(); err != nil {
-		logger.Warn("Failed to load profiles for SSO detection", zap.Error(err))
-	}
-
-	// Create a custom options slice to handle SSO profiles
-	var options []func(*config.LoadOptions) error
-
-	// Add profile and region configuration
-	options = append(options,
-		config.WithSharedConfigProfile(profile),
-		config.WithRegion(region),
-	)
-
-	// Enable SSO support by setting the appropriate environment variables if they exist
-	if ssoSessionName := os.Getenv("AWS_SSO_SESSION_NAME"); ssoSessionName != "" {
-		configFiles := []string{
-			os.Getenv("AWS_CONFIG_FILE"),
-			os.Getenv("AWS_SHARED_CREDENTIALS_FILE"),
-		}
-		options = append(options, config.WithSharedConfigFiles(configFiles))
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, options...)
+	cfg, _, err := loadAWSConfig(ctx, profile, region)
 	if err != nil {
-		// Check if this is an SSO profile and provide a specific error message
-		if profile, exists := profileManager.GetProfile(profile); exists && profile.IsSSOProfileConfigured() {
-			return nil, fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile.Name, profile.Name, err)
-		}
-		// Check if this is an SSO-related error
-		if isSSOError(err) {
-			return nil, fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
-		}
-		return nil, fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
+		return nil, err
 	}
 
 	client := &Client{
@@ -117,6 +81,46 @@ func NewClient(profile, region string) (*Client, error) {
 	return client, nil
 }
 
+// loadAWSConfig loads AWS configuration for the given profile and region
+func loadAWSConfig(ctx context.Context, profile, region string) (aws.Config, *ProfileManager, error) {
+	profileManager := NewProfileManager(
+		GetDefaultConfigPath(),
+		GetDefaultCredentialsPath(),
+	)
+
+	if err := profileManager.LoadProfiles(); err != nil {
+		logger.Warn("Failed to load profiles for SSO detection", zap.Error(err))
+	}
+
+	var options []func(*config.LoadOptions) error
+
+	options = append(options,
+		config.WithSharedConfigProfile(profile),
+		config.WithRegion(region),
+	)
+
+	if ssoSessionName := os.Getenv("AWS_SSO_SESSION_NAME"); ssoSessionName != "" {
+		configFiles := []string{
+			os.Getenv("AWS_CONFIG_FILE"),
+			os.Getenv("AWS_SHARED_CREDENTIALS_FILE"),
+		}
+		options = append(options, config.WithSharedConfigFiles(configFiles))
+	}
+
+	cfg, err := config.LoadDefaultConfig(ctx, options...)
+	if err != nil {
+		if p, exists := profileManager.GetProfile(profile); exists && p.IsSSOProfileConfigured() {
+			return aws.Config{}, nil, fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", p.Name, p.Name, err)
+		}
+		if isSSOError(err) {
+			return aws.Config{}, nil, fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
+		}
+		return aws.Config{}, nil, fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
+	}
+
+	return cfg, profileManager, nil
+}
+
 func (c *Client) initializeClients() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -128,11 +132,26 @@ func (c *Client) initializeClients() error {
 	stsClient := sts.NewFromConfig(c.config)
 	cloudWatchLogsClient := cloudwatchlogs.NewFromConfig(c.config)
 
-	ec2Svc, _ := clients.NewEC2Service(ec2Client)
-	s3Svc, _ := clients.NewS3Service(s3Client)
-	rdsSvc, _ := clients.NewRDSService(rdsClient)
-	lambdaSvc, _ := clients.NewLambdaService(lambdaClient)
-	cloudWatchLogsSvc, _ := clients.NewCloudWatchLogsService(cloudWatchLogsClient)
+	ec2Svc, err := clients.NewEC2Service(ec2Client)
+	if err != nil {
+		return fmt.Errorf("failed to initialize EC2 service: %w", err)
+	}
+	s3Svc, err := clients.NewS3Service(s3Client)
+	if err != nil {
+		return fmt.Errorf("failed to initialize S3 service: %w", err)
+	}
+	rdsSvc, err := clients.NewRDSService(rdsClient)
+	if err != nil {
+		return fmt.Errorf("failed to initialize RDS service: %w", err)
+	}
+	lambdaSvc, err := clients.NewLambdaService(lambdaClient)
+	if err != nil {
+		return fmt.Errorf("failed to initialize Lambda service: %w", err)
+	}
+	cloudWatchLogsSvc, err := clients.NewCloudWatchLogsService(cloudWatchLogsClient)
+	if err != nil {
+		return fmt.Errorf("failed to initialize CloudWatch Logs service: %w", err)
+	}
 
 	c.clients = &ServiceClients{
 		EC2:            ec2Svc,
@@ -259,45 +278,9 @@ func (c *Client) SwitchProfile(profile, region string) error {
 		zap.String("to_profile", profile),
 		zap.String("region", region))
 
-	// Check if this is an SSO profile
-	profileManager := NewProfileManager(
-		GetDefaultConfigPath(),
-		GetDefaultCredentialsPath(),
-	)
-
-	if err := profileManager.LoadProfiles(); err != nil {
-		logger.Warn("Failed to load profiles for SSO detection", zap.Error(err))
-	}
-
-	// Create a custom options slice to handle SSO profiles
-	var options []func(*config.LoadOptions) error
-
-	// Add profile and region configuration
-	options = append(options,
-		config.WithSharedConfigProfile(profile),
-		config.WithRegion(region),
-	)
-
-	// Enable SSO support by setting the appropriate environment variables if they exist
-	if ssoSessionName := os.Getenv("AWS_SSO_SESSION_NAME"); ssoSessionName != "" {
-		configFiles := []string{
-			os.Getenv("AWS_CONFIG_FILE"),
-			os.Getenv("AWS_SHARED_CREDENTIALS_FILE"),
-		}
-		options = append(options, config.WithSharedConfigFiles(configFiles))
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, options...)
+	cfg, _, err := loadAWSConfig(ctx, profile, region)
 	if err != nil {
-		// Check if this is an SSO profile and provide a specific error message
-		if profile, exists := profileManager.GetProfile(profile); exists && profile.IsSSOProfileConfigured() {
-			return fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile.Name, profile.Name, err)
-		}
-		// Check if this is an SSO-related error
-		if isSSOError(err) {
-			return fmt.Errorf("failed to load AWS config for SSO profile %s. Please run 'aws sso login --profile %s' to authenticate and try again: %w", profile, profile, err)
-		}
-		return fmt.Errorf("failed to load AWS config for profile %s: %w", profile, err)
+		return err
 	}
 
 	c.mu.Lock()

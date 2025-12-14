@@ -3,7 +3,6 @@ package clients
 import (
 	"context"
 	"fmt"
-	"log"
 	"swiss-army-tui/pkg/logger"
 
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
@@ -32,7 +31,7 @@ type LambdaService struct {
 
 func NewLambdaService(lambdaClient *lambda.Client) (*LambdaService, error) {
 	if lambdaClient == nil {
-		return nil, fmt.Errorf("No Lambda client provided")
+		return nil, fmt.Errorf("Lambda client not provided")
 	}
 
 	return &LambdaService{
@@ -59,9 +58,9 @@ func (c *LambdaService) GetLambdaDetail(ctx context.Context) ([]LambdaFunctionDe
 		})
 		if err != nil {
 			if fn.FunctionName != nil {
-				log.Printf("Error getting details for %s: %v", *fn.FunctionName, err)
+				logger.Warn("Error getting function details", zap.String("function", *fn.FunctionName), zap.Error(err))
 			} else {
-				log.Printf("Error getting function details: %v", err)
+				logger.Warn("Error getting function details", zap.Error(err))
 			}
 			continue
 		}

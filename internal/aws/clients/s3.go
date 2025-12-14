@@ -61,7 +61,7 @@ func (s *S3Service) GetS3Detail(ctx context.Context) ([]S3Details, error) {
 
 func NewS3Service(S3Client *s3.Client) (*S3Service, error) {
 	if S3Client == nil {
-		return nil, fmt.Errorf("No S3 client provided")
+		return nil, fmt.Errorf("S3 client not provided")
 	}
 
 	return &S3Service{

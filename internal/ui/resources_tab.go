@@ -44,15 +44,14 @@ type ResourcesTab struct {
 
 // Resource represents an AWS resource
 type Resource struct {
-	ID               string
-	Name             string
-	Type             string
-	State            string
-	Region           string
-	CreatedDate      string
-	Tags             map[string]string
-	Details          map[string]interface{}
-	SnapStartEnabled bool
+	ID          string
+	Name        string
+	Type        string
+	State       string
+	Region      string
+	CreatedDate string
+	Tags        map[string]string
+	Details     map[string]interface{}
 }
 
 // ServiceInfo represents information about an AWS service
@@ -466,11 +465,6 @@ func (rt *ResourcesTab) loadLambdaFunctions() ([]Resource, error) {
 	if err != nil {
 		return nil, err
 	}
-	// b, err := rt.awsClient.GetS3FunctionDetails(ctx)
-	// logger.Infof("Bucketssss: %v", b)
-	// if err != nil {
-	// 	return nil, err
-	// }
 
 	var resources []Resource
 	for _, d := range details {
@@ -493,7 +487,6 @@ func (rt *ResourcesTab) loadLambdaFunctions() ([]Resource, error) {
 				"SnapStartStatus":  d.SnapStartStatus,
 				"LogGroupName":     d.LogGroupName,
 			},
-			SnapStartEnabled: d.SnapStartEnabled,
 		}
 		resources = append(resources, res)
 	}
@@ -642,9 +635,8 @@ func (rt *ResourcesTab) updateResourceDetails(resource *Resource) {
 [yellow]State:[-] %s
 [yellow]Region:[-] %s
 [yellow]Created:[-] %s
-[yellow]SnapStart Enabled:[-] %t
 
-`, resource.Name, resource.ID, resource.Type, resource.State, resource.Region, resource.CreatedDate, resource.SnapStartEnabled)
+`, resource.Name, resource.ID, resource.Type, resource.State, resource.Region, resource.CreatedDate)
 
 	// Add tags if any
 	if len(resource.Tags) > 0 {
