@@ -158,6 +158,12 @@ func (rt *ResourcesTab) initializeUI() error {
 		case 'l':
 			rt.onLambdaLogsKey()
 			return nil
+		case 's':
+			rt.onEC2StartInstance()
+			return nil
+		case 'p':
+			rt.onEC2StopInstance()
+			return nil
 		}
 		logger.Info("Service list key pressed", zap.String("key", event.Name()))
 		logger.Info("Resource table key pressed", zap.String("key", event.Name()))
@@ -744,7 +750,107 @@ func (rt *ResourcesTab) Refresh() {
 
 // GetView returns the main view component
 func (rt *ResourcesTab) GetView() tview.Primitive {
+
 	return rt.view
+}
+func (rt *ResourcesTab) onEC2StartInstance() {
+	logger.Info("onEC2StartInstance called", zap.String("selectedService", rt.selectedService))
+
+	if rt.selectedService != "ec2" {
+		logger.Info("Not EC2 service, ignoring")
+		return
+	}
+
+	if rt.selectedRes == nil {
+		logger.Info("No resource selected")
+		return
+	}
+
+	instanceID := rt.selectedRes.ID
+	if instanceID == "" {
+		rt.updateStatus("No InstanceId found for selected resource", "red")
+		logger.Error("No InstanceId found in selected resource")
+		return
+	}
+
+	rt.updateStatus(fmt.Sprintf("Starting EC2 instance %s...", instanceID), "yellow")
+
+	// Since this is a UI-triggered asynchronous operation meant not to block the UI,
+	// we do NOT generally use a WaitGroup for the user-facing routine.
+	// State is protected with locks where appropriate, and UI updates are handled on the main UI goroutine.
+	// If you ever need to clean up or synchronize these routines (such as cancelling/retrying),
+	// consider keeping a list/context for outstanding operations, not just WaitGroups.
+
+	go func(id string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err := rt.awsClient.GetClients().EC2.StartInstance(ctx, id)
+		if err != nil {
+			logger.Error("Failed to start EC2 instance", zap.String("instanceID", id), zap.Error(err))
+			if rt.app != nil {
+				rt.app.QueueUpdateDraw(func() {
+					rt.updateStatus(fmt.Sprintf("Failed to start instance: %s", err.Error()), "red")
+				})
+			}
+			return
+		}
+
+		logger.Info("EC2 instance started", zap.String("instanceID", id))
+		if rt.app != nil {
+			rt.app.QueueUpdateDraw(func() {
+				rt.updateStatus(fmt.Sprintf("Instance %s started", id), "green")
+				rt.Refresh()
+			})
+		}
+	}(instanceID)
+}
+
+func (rt *ResourcesTab) onEC2StopInstance() {
+	logger.Info("onEC2StopInstance called", zap.String("selectedService", rt.selectedService))
+
+	if rt.selectedService != "ec2" {
+		logger.Info("Not EC2 service, ignoring")
+		return
+	}
+
+	if rt.selectedRes == nil {
+		logger.Info("No resource selected")
+		return
+	}
+
+	instanceID := rt.selectedRes.ID
+	if instanceID == "" {
+		rt.updateStatus("No InstanceId found for selected resource", "red")
+		logger.Error("No InstanceId found in selected resource")
+		return
+	}
+
+	rt.updateStatus(fmt.Sprintf("Stopping EC2 instance %s...", instanceID), "yellow")
+
+	go func(id string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		err := rt.awsClient.GetClients().EC2.StopInstance(ctx, id)
+		if err != nil {
+			logger.Error("Failed to stop EC2 instance", zap.String("instanceID", id), zap.Error(err))
+			if rt.app != nil {
+				rt.app.QueueUpdateDraw(func() {
+					rt.updateStatus(fmt.Sprintf("Failed to stop instance: %s", err.Error()), "red")
+				})
+			}
+			return
+		}
+
+		logger.Info("EC2 instance stopped", zap.String("instanceID", id))
+		if rt.app != nil {
+			rt.app.QueueUpdateDraw(func() {
+				rt.updateStatus(fmt.Sprintf("Instance %s stopped", id), "green")
+				rt.Refresh()
+			})
+		}
+	}(instanceID)
 }
 
 func (rt *ResourcesTab) onLambdaLogsKey() {
